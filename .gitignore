@@ -1,0 +1,25 @@
+# Binaries
+/bin/
+*.exe
+*.out
+probe
+
+# Coverage
+coverage.out
+coverage.html
+
+# Env locales
+.env
+.env.local
+
+# Claude personal (no compartir)
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
