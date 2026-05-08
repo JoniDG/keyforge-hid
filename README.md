@@ -39,7 +39,37 @@ VID:PID    BUS  MANUFACTURER  PRODUCT        USAGE      IFACE  PATH
 
 When the host has hardware that `keyforge-hid` recognizes (currently the SDINNOVATION SIDE-KEYBOARD reference keypad), a `Recognized devices:` summary is printed before the table with one line per identified device.
 
-Plug the keypad and run it — the device should show up. Future phases will add input streaming and event mapping.
+Plug the keypad and run it — the device should show up.
+
+### Streaming raw input reports
+
+```bash
+make build && ./bin/probe -stream
+```
+
+`-stream` opens the first recognized device's primary keyboard interface and dumps every input report as hex until you Ctrl-C:
+
+```
+Streaming SDINNOVATION SIDE-KEYBOARD (6d82:dc83) iface 0 [usage 0001:0006]
+Press Ctrl-C to stop.
+
+[t=  0.123s len= 8] 00 00 04 00 00 00 00 00
+[t=  0.156s len= 8] 00 00 00 00 00 00 00 00
+```
+
+Reports are still raw bytes at this stage; mapping them to typed `InputEvent`s is the next phase.
+
+#### OS permissions
+
+Reading raw HID reports from a keyboard-class interface requires elevated privileges on every major OS. Without them, `-stream` fails with a permission error before the first read.
+
+| Platform | What you need |
+|---|---|
+| **macOS** | Grant **Input Monitoring** to your terminal: *System Settings → Privacy & Security → Input Monitoring → +* and add `Terminal.app` (or iTerm, Warp, etc.). Restart the terminal session. Child processes inherit the permission. |
+| **Linux** | Either run as `root` or add a udev rule that grants your user access to `/dev/hidraw*` for the device's VID/PID. The keypad's VID/PID is `0x6d82`/`0xdc83`. |
+| **Windows** | Standard user permissions are usually enough for reading HID; opening with exclusive access (planned for a later phase) needs admin. |
+
+Hijacking the keystrokes so the OS does not also receive them is a separate concern, tracked as a TBD in the project plan and resolved in a later phase.
 
 ## Layout
 

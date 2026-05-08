@@ -1,5 +1,14 @@
 package device
 
+import "fmt"
+
+// HID usage page and usage values for the standard keyboard interface,
+// per the HID Usage Tables (Generic Desktop / Keyboard).
+const (
+	usagePageGenericDesktop uint16 = 0x0001
+	usageKeyboard           uint16 = 0x0006
+)
+
 // IdentifiedDevice groups every Info reported by enumeration that
 // shares a (VendorID, ProductID) pair, plus the registry metadata when
 // the device is recognized.
@@ -12,6 +21,20 @@ type IdentifiedDevice struct {
 	Recognized bool
 	Known      KnownDevice
 	Interfaces []Info
+}
+
+// PrimaryInput returns the interface that should be used to receive
+// keyboard-style input reports for this device. It picks the first
+// interface whose HID descriptor reports a Generic Desktop / Keyboard
+// usage. When none of the interfaces qualify, ErrNoPrimaryInterface
+// is returned and the caller has to choose explicitly.
+func (d IdentifiedDevice) PrimaryInput() (Info, error) {
+	for _, iface := range d.Interfaces {
+		if iface.UsagePage == usagePageGenericDesktop && iface.Usage == usageKeyboard {
+			return iface, nil
+		}
+	}
+	return Info{}, fmt.Errorf("device.PrimaryInput %04x:%04x: %w", d.VendorID, d.ProductID, ErrNoPrimaryInterface)
 }
 
 // Identifier groups enumerated Info entries by (VendorID, ProductID)

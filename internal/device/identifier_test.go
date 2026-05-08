@@ -113,3 +113,61 @@ func TestNewIdentifier_ShouldReturnNonNilImpl(t *testing.T) {
 	t.Parallel()
 	assert.NotNil(t, NewIdentifier(DefaultRegistry()))
 }
+
+func TestIdentifiedDevice_PrimaryInput_WhenKeyboardInterfacePresent_ShouldReturnIt(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{
+		VendorID:  SideKeyboardKeypad.VendorID,
+		ProductID: SideKeyboardKeypad.ProductID,
+		Interfaces: []Info{
+			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor-specific"},
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "keyboard"},
+		},
+	}
+
+	got, err := d.PrimaryInput()
+
+	require.NoError(t, err)
+	assert.Equal(t, "keyboard", got.Path)
+}
+
+func TestIdentifiedDevice_PrimaryInput_WhenMultipleKeyboardInterfaces_ShouldReturnFirstSeen(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{
+		Interfaces: []Info{
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "first"},
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "second"},
+		},
+	}
+
+	got, err := d.PrimaryInput()
+
+	require.NoError(t, err)
+	assert.Equal(t, "first", got.Path)
+}
+
+func TestIdentifiedDevice_PrimaryInput_WhenNoKeyboardInterface_ShouldReturnErrNoPrimaryInterface(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{
+		VendorID:  0xAAAA,
+		ProductID: 0xBBBB,
+		Interfaces: []Info{
+			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor-only"},
+		},
+	}
+
+	_, err := d.PrimaryInput()
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoPrimaryInterface)
+}
+
+func TestIdentifiedDevice_PrimaryInput_WhenNoInterfaces_ShouldReturnErrNoPrimaryInterface(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{}
+
+	_, err := d.PrimaryInput()
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoPrimaryInterface)
+}
