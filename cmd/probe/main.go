@@ -1,6 +1,7 @@
 // Command probe lists HID devices visible to the host. With -stream
 // it opens the first recognized device's primary input interface and
-// dumps incoming reports until interrupted.
+// dumps incoming reports until interrupted; -events additionally
+// decodes them into protocol.InputEvent JSON lines.
 //
 // This is a development helper for KeyForge phase 1; not part of the
 // production binaries.
@@ -9,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,6 +23,8 @@ import (
 	"time"
 
 	"github.com/JoniDG/keyforge-hid/internal/device"
+	"github.com/JoniDG/keyforge-hid/internal/events"
+	"github.com/JoniDG/keyforge-protocol/go/protocol"
 )
 
 func main() {
@@ -33,8 +37,12 @@ func main() {
 func run(args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
 	stream := fs.Bool("stream", false, "open the first recognized device's primary input interface and dump reports")
+	emitEvents := fs.Bool("events", false, "with -stream, decode reports into protocol.InputEvent JSON lines instead of hex dump")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
+	}
+	if *emitEvents && !*stream {
+		return errors.New("probe: -events requires -stream")
 	}
 
 	infos, err := device.NewEnumerator().List(context.Background())
@@ -45,7 +53,7 @@ func run(args []string) error {
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
 	if *stream {
-		return streamFirstRecognized(identified)
+		return streamFirstRecognized(identified, *emitEvents)
 	}
 	return listAll(infos, identified)
 }
@@ -69,7 +77,7 @@ func listAll(infos []device.Info, identified []device.IdentifiedDevice) error {
 	return nil
 }
 
-func streamFirstRecognized(identified []device.IdentifiedDevice) error {
+func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool) error {
 	target, ok := firstRecognized(identified)
 	if !ok {
 		return errors.New("probe: no recognized device connected (run probe without -stream to list everything)")
@@ -95,13 +103,12 @@ func streamFirstRecognized(identified []device.IdentifiedDevice) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	start := time.Now()
-	err = stream.Read(ctx, func(report []byte) error {
-		_, _ = fmt.Fprintf(os.Stdout, "[t=%7.3fs len=%2d] %s\n",
-			time.Since(start).Seconds(), len(report), formatHex(report),
-		)
-		return nil
-	})
+	callback := newHexDumpCallback(time.Now())
+	if emitEvents {
+		callback = newEventsCallback(events.DeviceIDFor(target.VendorID, target.ProductID, primary.Serial))
+	}
+
+	err = stream.Read(ctx, callback)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		fmt.Fprintln(os.Stderr, "\nstopped.")
 		return nil
@@ -110,6 +117,39 @@ func streamFirstRecognized(identified []device.IdentifiedDevice) error {
 		return fmt.Errorf("probe: %w", err)
 	}
 	return nil
+}
+
+func newHexDumpCallback(start time.Time) func([]byte) error {
+	return func(report []byte) error {
+		_, _ = fmt.Fprintf(os.Stdout, "[t=%7.3fs len=%2d] %s\n",
+			time.Since(start).Seconds(), len(report), formatHex(report),
+		)
+		return nil
+	}
+}
+
+func newEventsCallback(deviceID protocol.DeviceID) func([]byte) error {
+	mapper := events.NewKeyboardMapper(deviceID)
+	encoder := json.NewEncoder(os.Stdout)
+	return func(report []byte) error {
+		evs, err := mapper.Map(report)
+		if err != nil {
+			// Some interfaces with UsagePage=Keyboard expose non-boot
+			// report layouts. Skip silently so the operator only sees
+			// the events that actually decoded.
+			if errors.Is(err, events.ErrShortReport) {
+				return nil
+			}
+			fmt.Fprintln(os.Stderr, err)
+			return nil
+		}
+		for _, e := range evs {
+			if err := encoder.Encode(e); err != nil {
+				return fmt.Errorf("probe: encode event: %w", err)
+			}
+		}
+		return nil
+	}
 }
 
 func firstRecognized(devices []device.IdentifiedDevice) (device.IdentifiedDevice, bool) {
