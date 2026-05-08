@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 
@@ -26,6 +27,9 @@ func run() error {
 		return fmt.Errorf("probe: %w", err)
 	}
 
+	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
+	printRecognized(os.Stdout, identified)
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "VID:PID\tBUS\tMANUFACTURER\tPRODUCT\tUSAGE\tIFACE\tPATH")
 	for _, i := range infos {
@@ -40,6 +44,26 @@ func run() error {
 	}
 	fmt.Fprintf(os.Stderr, "\n%d device(s) enumerated.\n", len(infos))
 	return nil
+}
+
+func printRecognized(out io.Writer, devices []device.IdentifiedDevice) {
+	recognized := make([]device.IdentifiedDevice, 0, len(devices))
+	for _, d := range devices {
+		if d.Recognized {
+			recognized = append(recognized, d)
+		}
+	}
+	if len(recognized) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintln(out, "Recognized devices:")
+	for _, d := range recognized {
+		_, _ = fmt.Fprintf(out, "  - %s (%04x:%04x) — %d interface(s)\n",
+			d.Known.Name, d.VendorID, d.ProductID, len(d.Interfaces),
+		)
+	}
+	_, _ = fmt.Fprintln(out)
 }
 
 func truncate(s string, n int) string {
