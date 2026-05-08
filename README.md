@@ -15,10 +15,12 @@
 | Platform | Install |
 |---|---|
 | macOS (Homebrew) | `brew install hidapi` |
-| Debian / Ubuntu | `sudo apt install libhidapi-dev` |
+| Debian / Ubuntu | `sudo apt install libhidapi-dev libudev-dev` |
 | Arch Linux | `sudo pacman -S hidapi` |
-| Fedora | `sudo dnf install hidapi-devel` |
+| Fedora | `sudo dnf install hidapi-devel systemd-devel` |
 | Windows (MSYS2) | `pacman -S mingw-w64-x86_64-{gcc,hidapi}` |
+
+On Linux, `libudev-dev` (or `systemd-devel`) is required because `sstallion/go-hid` vendors hidapi's hidraw backend, which depends on libudev for device enumeration.
 
 On Windows the resulting binary needs `hidapi.dll` next to the `.exe` or in `PATH`.
 

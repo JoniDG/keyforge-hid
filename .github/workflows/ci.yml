@@ -19,8 +19,8 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - name: Install hidapi
-        run: sudo apt-get update && sudo apt-get install -y libhidapi-dev
+      - name: Install hidapi build deps
+        run: sudo apt-get update && sudo apt-get install -y libhidapi-dev libudev-dev
       - name: Build
         run: go build ./...
       - name: Run tests
@@ -46,8 +46,8 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - name: Install hidapi
-        run: sudo apt-get update && sudo apt-get install -y libhidapi-dev
-      - uses: golangci/golangci-lint-action@v6
+      - name: Install hidapi build deps
+        run: sudo apt-get update && sudo apt-get install -y libhidapi-dev libudev-dev
+      - uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.1
