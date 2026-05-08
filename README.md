@@ -57,7 +57,22 @@ Press Ctrl-C to stop.
 [t=  0.156s len= 8] 00 00 00 00 00 00 00 00
 ```
 
-Reports are still raw bytes at this stage; mapping them to typed `InputEvent`s is the next phase.
+### Streaming typed events
+
+Add `-events` to decode each report into [`protocol.InputEvent`](https://github.com/JoniDG/keyforge-protocol/tree/main/go/protocol) JSON lines instead of hex bytes. One press of a key bound to `Ctrl+A` produces four events (one per state change):
+
+```bash
+make build && ./bin/probe -stream -events | jq
+```
+
+```json
+{"action":"press","device_id":"VID_6D82_PID_DC83","input_id":"mod_lctrl","kind":"key","timestamp_ms":1746662400123}
+{"action":"press","device_id":"VID_6D82_PID_DC83","input_id":"key_0x04","kind":"key","timestamp_ms":1746662400123}
+{"action":"release","device_id":"VID_6D82_PID_DC83","input_id":"key_0x04","kind":"key","timestamp_ms":1746662400245}
+{"action":"release","device_id":"VID_6D82_PID_DC83","input_id":"mod_lctrl","kind":"key","timestamp_ms":1746662400245}
+```
+
+`input_id` is derived from the HID byte: `mod_<name>` for the modifier byte (left/right ctrl/shift/alt/meta), `key_0x<hex>` for keycodes from the boot keyboard report. Encoder events come from a different HID interface and are mapped in the next phase.
 
 #### OS permissions
 
