@@ -6,15 +6,38 @@
 
 ## Status
 
-🚧 **Pre-alpha.** Scaffold only — no working code yet.
+🚧 **Pre-alpha.** Phase 1.a in progress: HID enumeration works; input streaming, identification and event mapping are next.
+
+## Build prerequisites
+
+`keyforge-hid` uses [`sstallion/go-hid`](https://github.com/sstallion/go-hid), which wraps the `hidapi` C library. You need a C toolchain (cgo, enabled by default) and `hidapi` installed on your build host:
+
+| Platform | Install |
+|---|---|
+| macOS (Homebrew) | `brew install hidapi` |
+| Debian / Ubuntu | `sudo apt install libhidapi-dev libudev-dev` |
+| Arch Linux | `sudo pacman -S hidapi` |
+| Fedora | `sudo dnf install hidapi-devel systemd-devel` |
+| Windows (MSYS2) | `pacman -S mingw-w64-x86_64-{gcc,hidapi}` |
+
+On Linux, `libudev-dev` (or `systemd-devel`) is required because `sstallion/go-hid` vendors hidapi's hidraw backend, which depends on libudev for device enumeration.
+
+On Windows the resulting binary needs `hidapi.dll` next to the `.exe` or in `PATH`.
 
 ## Quickstart
 
 ```bash
-go run ./cmd/probe
+make probe
 ```
 
-The `probe` binary lists HID devices visible to the host, then prints input events from a target device until you Ctrl-C.
+Prints a table of every HID device visible to the host:
+
+```
+VID:PID    BUS  MANUFACTURER  PRODUCT        USAGE      IFACE  PATH
+6d82:dc83  USB  SDINNOVATION  SIDE-KEYBOARD  0001:0006  0      DevSrvsID:...
+```
+
+Plug the keypad and run it — the device should show up. Future phases will add input streaming and event mapping.
 
 ## Layout
 
