@@ -37,6 +37,8 @@ VID:PID    BUS  MANUFACTURER  PRODUCT        USAGE      IFACE  PATH
 6d82:dc83  USB  SDINNOVATION  SIDE-KEYBOARD  0001:0006  0      DevSrvsID:...
 ```
 
+When the host has hardware that `keyforge-hid` recognizes (currently the SDINNOVATION SIDE-KEYBOARD reference keypad), a `Recognized devices:` summary is printed before the table with one line per identified device.
+
 Plug the keypad and run it — the device should show up. Future phases will add input streaming and event mapping.
 
 ## Layout
