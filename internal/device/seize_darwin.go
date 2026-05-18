@@ -4,20 +4,24 @@ package device
 
 import "github.com/sstallion/go-hid"
 
-// enableSeize sets hidapi's process-wide exclusive-open flag. After
-// this call, every hid.OpenPath invocation requests
-// kIOHIDOptionsTypeSeizeDevice from IOKit, which prevents the OS HID
-// services (keyboard layer, consumer-control routing) from delivering
-// those reports to other apps. The flag persists for the lifetime of
-// the process and is safe to set multiple times.
-func enableSeize() error {
-	hid.SetOpenExclusive(true)
+// setSeize toggles hidapi's process-wide exclusive-open flag. With
+// enabled=true, every subsequent hid.OpenPath requests
+// kIOHIDOptionsTypeSeizeDevice from IOKit so the OS HID services stop
+// delivering those reports to other apps. With enabled=false, opens
+// use kIOHIDOptionsTypeNone and the OS keeps receiving its copy.
+//
+// hidapi auto-initialises its global to seize on darwin (see hid_init
+// in hid_darwin.c — "Backward compatibility"). Callers that want
+// shared mode MUST call this with false explicitly; merely not calling
+// it leaves the flag at the seize default.
+func setSeize(enabled bool) error {
+	hid.SetOpenExclusive(enabled)
 	return nil
 }
 
 func platformSeizeSupport() SeizeSupport {
 	return SeizeSupport{
 		Supported: true,
-		Note:      "darwin: opens HID devices with kIOHIDOptionsTypeSeizeDevice via hidapi",
+		Note:      "darwin: hidapi opens with kIOHIDOptionsTypeSeizeDevice when seize is enabled; shared mode requires an explicit SetSeize(false) call",
 	}
 }

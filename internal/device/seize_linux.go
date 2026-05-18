@@ -2,9 +2,9 @@
 
 package device
 
-// enableSeize on Linux is intentionally a stub. hidapi on Linux uses
-// the hidraw backend, which delivers a copy of every report to our
-// process — but the kernel's evdev subsystem still synthesizes
+// setSeize on Linux is a stub for the enable path. hidapi on Linux
+// uses the hidraw backend, which delivers a copy of every report to
+// our process — but the kernel's evdev subsystem still synthesizes
 // keyboard/consumer events for other userspace consumers in parallel.
 // Closing that second channel requires a separate evdev grab.
 //
@@ -20,7 +20,12 @@ package device
 //
 // Vendor-specific top-level collections (e.g. RGB) do not go through
 // evdev, so no grab is needed for them.
-func enableSeize() error {
+//
+// SetSeize(false) is a no-op: hidraw is already shared by default.
+func setSeize(enabled bool) error {
+	if !enabled {
+		return nil
+	}
 	return ErrSeizeNotImplemented
 }
 

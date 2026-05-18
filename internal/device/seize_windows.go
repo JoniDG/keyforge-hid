@@ -2,9 +2,9 @@
 
 package device
 
-// enableSeize on Windows is intentionally a stub. hidapi on Windows
-// opens the HID device via the user-mode HID class driver, but
-// keyboard / consumer-control TLCs are also surfaced through the
+// setSeize on Windows is a stub for the enable path. hidapi on
+// Windows opens the HID device via the user-mode HID class driver,
+// but keyboard / consumer-control TLCs are also surfaced through the
 // legacy keyboard stack (WM_KEYDOWN, system audio key dispatch).
 // Closing that legacy channel requires the Raw Input API.
 //
@@ -22,7 +22,13 @@ package device
 //
 // Vendor-specific collections (RGB) bypass the legacy stack and need
 // no extra work.
-func enableSeize() error {
+//
+// SetSeize(false) is a no-op: Windows HID class driver is already
+// shared by default.
+func setSeize(enabled bool) error {
+	if !enabled {
+		return nil
+	}
 	return ErrSeizeNotImplemented
 }
 

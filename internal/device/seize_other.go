@@ -2,11 +2,15 @@
 
 package device
 
-// enableSeize is a no-op stub for build targets KeyForge does not
-// recognize. New OS support starts here: copy this file to seize_<os>.go
-// with the appropriate build tag and replace the body with the real
-// implementation.
-func enableSeize() error {
+// setSeize is a no-op stub for build targets KeyForge does not
+// recognize. New OS support starts here: copy this file to
+// seize_<os>.go with the appropriate build tag and replace the body
+// with the real implementation. SetSeize(false) succeeds because
+// every unknown platform is assumed to default to shared mode.
+func setSeize(enabled bool) error {
+	if !enabled {
+		return nil
+	}
 	return ErrSeizeNotImplemented
 }
 

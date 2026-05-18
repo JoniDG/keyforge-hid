@@ -109,14 +109,12 @@ func (s seizeStatus) String() string {
 
 func resolveSeize(want bool, warn io.Writer) seizeStatus {
 	support := device.PlatformSeizeSupport()
-	if !want {
-		return seizeStatus{requested: false, active: false, note: support.Note}
-	}
-	if err := device.EnableSeize(); err != nil {
+	err := device.SetSeize(want)
+	active := want && err == nil
+	if err != nil {
 		_, _ = fmt.Fprintf(warn, "probe: warning: could not seize HID devices (%v); OS will receive reports in parallel\n", err)
-		return seizeStatus{requested: true, active: false, note: support.Note}
 	}
-	return seizeStatus{requested: true, active: true, note: support.Note}
+	return seizeStatus{requested: want, active: active, note: support.Note}
 }
 
 func listAll(infos []device.Info, identified []device.IdentifiedDevice) error {

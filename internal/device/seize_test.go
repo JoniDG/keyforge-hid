@@ -8,25 +8,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEnableSeize_OnSupportedPlatform_ShouldReturnNil(t *testing.T) {
+func TestSetSeize_OnSupportedPlatform_BothDirectionsShouldSucceed(t *testing.T) {
 	t.Parallel()
-
-	err := EnableSeize()
-
-	if PlatformSeizeSupport().Supported {
-		require.NoError(t, err)
-	} else {
-		require.ErrorIs(t, err, ErrSeizeNotImplemented)
+	if !PlatformSeizeSupport().Supported {
+		t.Skip("platform stub — covered by the unsupported test below")
 	}
+
+	require.NoError(t, SetSeize(true))
+	require.NoError(t, SetSeize(false))
 }
 
-func TestEnableSeize_ShouldBeIdempotent(t *testing.T) {
+func TestSetSeize_OnStubPlatform_DisableShouldSucceedEnableShouldError(t *testing.T) {
+	t.Parallel()
+	if PlatformSeizeSupport().Supported {
+		t.Skip("platform supports seize — covered by the dedicated test above")
+	}
+
+	assert.NoError(t, SetSeize(false), "shared mode is the platform default and must always succeed")
+	assert.ErrorIs(t, SetSeize(true), ErrSeizeNotImplemented)
+}
+
+func TestSetSeize_ShouldBeIdempotent(t *testing.T) {
 	t.Parallel()
 
-	first := EnableSeize()
-	second := EnableSeize()
+	first := SetSeize(true)
+	second := SetSeize(true)
+	assert.Equal(t, first, second, "calling SetSeize(true) twice must yield the same result")
 
-	assert.Equal(t, first, second, "calling EnableSeize twice must yield the same result")
+	third := SetSeize(false)
+	fourth := SetSeize(false)
+	assert.Equal(t, third, fourth, "calling SetSeize(false) twice must yield the same result")
 }
 
 func TestPlatformSeizeSupport_NoteShouldBeNonEmpty(t *testing.T) {
