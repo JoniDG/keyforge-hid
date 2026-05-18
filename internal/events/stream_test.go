@@ -368,7 +368,7 @@ func TestRunReader_WhenMapperReturnsNonShortError_ShouldEnqueueOnErrs(t *testing
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	runReader(ctx, &wg, stream, mapper, events, errs)
+	runReader(ctx, &wg, stream, []reportMapper{mapper}, events, errs)
 	wg.Wait()
 
 	select {
@@ -393,7 +393,7 @@ func TestRunReader_WhenContextCancelledDuringSend_ShouldReturnWithoutEnqueueingE
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	go runReader(ctx, &wg, stream, mapper, events, errs)
+	go runReader(ctx, &wg, stream, []reportMapper{mapper}, events, errs)
 
 	time.Sleep(20 * time.Millisecond)
 	cancel()
@@ -404,6 +404,80 @@ func TestRunReader_WhenContextCancelledDuringSend_ShouldReturnWithoutEnqueueingE
 		t.Fatalf("context cancellation must not be reported as a reader error: %v", got)
 	default:
 	}
+}
+
+func TestStreamAll_WhenTwoInputsShareSamePath_ShouldOpenOnceAndApplyBothMappers(t *testing.T) {
+	t.Parallel()
+	// Both inputs share the same platform path. The stream delivers a
+	// 3-byte Consumer Control report: KeyboardMapper rejects it as
+	// ErrShortReport (silent skip), EncoderMapper decodes it.
+	opener := &stubOpener{
+		streams: map[string]device.InputStream{
+			"shared": newStubStream([]byte{0x03, 0xE9, 0x00}),
+		},
+	}
+	inputs := []device.MatchedInput{
+		{Info: device.Info{Path: "shared", UsagePage: 0x0001, Usage: 0x0006}, Role: device.RoleKeyboard},
+		{Info: device.Info{Path: "shared", UsagePage: 0x000c, Usage: 0x0001}, Role: device.RoleEncoder},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var got []protocol.InputEvent
+	err := StreamAll(ctx, opener, testDeviceID, inputs, func(e protocol.InputEvent) error {
+		got = append(got, e)
+		cancel()
+		return nil
+	})
+
+	require.True(t, errors.Is(err, context.Canceled))
+	require.Len(t, opener.calls, 1, "shared path must be opened exactly once")
+	assert.Equal(t, "shared", opener.calls[0])
+	require.Len(t, got, 1)
+	assert.Equal(t, protocol.InputActionRotateCw, got[0].Action)
+	assert.Equal(t, protocol.InputKindEncoder, got[0].Kind)
+}
+
+func TestStreamAll_WhenSharedPathDeliversReportsForBothMappers_ShouldEmitFromBoth(t *testing.T) {
+	t.Parallel()
+	// Same path, both an 8-byte boot keyboard report and a 3-byte
+	// Consumer Control report. Each mapper picks up its own.
+	opener := &stubOpener{
+		streams: map[string]device.InputStream{
+			"shared": newStubStream(
+				[]byte{0, 0, 0x04, 0, 0, 0, 0, 0},
+				[]byte{0x03, 0xE9, 0x00},
+			),
+		},
+	}
+	inputs := []device.MatchedInput{
+		{Info: device.Info{Path: "shared"}, Role: device.RoleKeyboard},
+		{Info: device.Info{Path: "shared"}, Role: device.RoleEncoder},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	byKind := map[protocol.InputKind]int{}
+	err := StreamAll(ctx, opener, testDeviceID, inputs, func(e protocol.InputEvent) error {
+		mu.Lock()
+		byKind[e.Kind]++
+		done := byKind[protocol.InputKindKey] >= 1 && byKind[protocol.InputKindEncoder] >= 1
+		mu.Unlock()
+		if done {
+			cancel()
+		}
+		return nil
+	})
+
+	require.True(t, errors.Is(err, context.Canceled))
+	require.Len(t, opener.calls, 1)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.GreaterOrEqual(t, byKind[protocol.InputKindKey], 1)
+	assert.GreaterOrEqual(t, byKind[protocol.InputKindEncoder], 1)
 }
 
 func TestStreamAll_WhenSinkErrorsMidStream_ShouldStopCallingSinkButKeepDrainingEvents(t *testing.T) {
