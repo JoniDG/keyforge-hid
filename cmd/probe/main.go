@@ -11,6 +11,11 @@
 // interface — hex dump by default, JSON events with -events. Useful
 // for debugging unrecognized layouts.
 //
+// Probe asks the platform to seize HID devices by default so the OS
+// stops receiving their reports in parallel; pass -shared to keep
+// the legacy behavior (e.g. to verify that a keypad's keystrokes
+// reach the OS in parallel with our decoder).
+//
 // This is a development helper for KeyForge phase 1; not part of the
 // production binaries.
 package main
@@ -49,6 +54,7 @@ func run(args []string) error {
 	emitEvents := fs.Bool("events", false, "with -stream, decode reports into protocol.InputEvent JSON lines instead of hex dump")
 	usageSelector := fs.String("usage", "", "with -stream, target the interface whose UsagePage:Usage equals AAAA:BBBB (hex, no 0x). Defaults to the primary keyboard interface.")
 	pathSelector := fs.String("path", "", "with -stream, target the interface whose platform path equals this exact value. Use when two interfaces share a usage. Mutually exclusive with -usage.")
+	shared := fs.Bool("shared", false, "with -stream, do NOT seize HID devices; let the OS receive reports in parallel. Default is to seize on supported platforms.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -64,6 +70,9 @@ func run(args []string) error {
 	if *pathSelector != "" && *usageSelector != "" {
 		return errors.New("probe: -path and -usage are mutually exclusive")
 	}
+	if *shared && !*stream {
+		return errors.New("probe: -shared requires -stream")
+	}
 
 	infos, err := device.NewEnumerator().List(context.Background())
 	if err != nil {
@@ -73,9 +82,39 @@ func run(args []string) error {
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
 	if *stream {
-		return streamFirstRecognized(identified, *emitEvents, *usageSelector, *pathSelector)
+		seizeStatus := resolveSeize(!*shared, os.Stderr)
+		return streamFirstRecognized(identified, *emitEvents, *usageSelector, *pathSelector, seizeStatus)
 	}
 	return listAll(infos, identified)
+}
+
+// seizeStatus captures what actually happened when probe tried (or
+// chose not) to seize the keypad, so the banner can report it.
+type seizeStatus struct {
+	requested bool
+	active    bool
+	note      string
+}
+
+func (s seizeStatus) String() string {
+	switch {
+	case !s.requested:
+		return "Seized: no (--shared override)"
+	case s.active:
+		return "Seized: yes (" + s.note + ")"
+	default:
+		return "Seized: no (" + s.note + ")"
+	}
+}
+
+func resolveSeize(want bool, warn io.Writer) seizeStatus {
+	support := device.PlatformSeizeSupport()
+	err := device.SetSeize(want)
+	active := want && err == nil
+	if err != nil {
+		_, _ = fmt.Fprintf(warn, "probe: warning: could not seize HID devices (%v); OS will receive reports in parallel\n", err)
+	}
+	return seizeStatus{requested: want, active: active, note: support.Note}
 }
 
 func listAll(infos []device.Info, identified []device.IdentifiedDevice) error {
@@ -97,19 +136,19 @@ func listAll(infos []device.Info, identified []device.IdentifiedDevice) error {
 	return nil
 }
 
-func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string) error {
+func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string, seize seizeStatus) error {
 	target, ok := firstRecognized(identified)
 	if !ok {
 		return errors.New("probe: no recognized device connected (run probe without -stream to list everything)")
 	}
 
 	if emitEvents && usageSelector == "" && pathSelector == "" {
-		return streamAllInputs(target)
+		return streamAllInputs(target, seize)
 	}
-	return streamSingleInterface(target, emitEvents, usageSelector, pathSelector)
+	return streamSingleInterface(target, emitEvents, usageSelector, pathSelector, seize)
 }
 
-func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string) error {
+func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string, seize seizeStatus) error {
 	iface, err := selectInterface(target, usageSelector, pathSelector)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
@@ -125,6 +164,7 @@ func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usag
 		target.Known.Name, target.VendorID, target.ProductID,
 		iface.Interface, iface.UsagePage, iface.Usage,
 	)
+	_, _ = fmt.Fprintln(os.Stdout, seize)
 	_, _ = fmt.Fprintln(os.Stdout, "Press Ctrl-C to stop.")
 	_, _ = fmt.Fprintln(os.Stdout)
 
@@ -147,7 +187,7 @@ func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usag
 	return nil
 }
 
-func streamAllInputs(target device.IdentifiedDevice) error {
+func streamAllInputs(target device.IdentifiedDevice, seize seizeStatus) error {
 	inputs := target.Inputs()
 	if len(inputs) == 0 {
 		return fmt.Errorf("probe: %04x:%04x exposes no declared inputs", target.VendorID, target.ProductID)
@@ -161,6 +201,7 @@ func streamAllInputs(target device.IdentifiedDevice) error {
 			in.Role, in.Info.Interface, in.Info.UsagePage, in.Info.Usage, in.Info.Path,
 		)
 	}
+	_, _ = fmt.Fprintln(os.Stdout, seize)
 	_, _ = fmt.Fprintln(os.Stdout, "Press Ctrl-C to stop.")
 	_, _ = fmt.Fprintln(os.Stdout)
 
