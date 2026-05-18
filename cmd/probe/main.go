@@ -127,12 +127,19 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 }
 
 // selectInterface picks the interface of target to stream from. When
-// selector is empty it falls back to the device's primary keyboard
-// interface (current default). When set, it must parse as AAAA:BBBB
-// hex and match one of target's interfaces by UsagePage:Usage.
+// selector is empty it returns the first interface tagged with the
+// keyboard role in target's registry-declared Inputs. When set, it
+// must parse as AAAA:BBBB hex and match one of target's interfaces by
+// UsagePage:Usage directly (bypassing the role layer; useful for
+// debugging unmapped interfaces).
 func selectInterface(target device.IdentifiedDevice, selector string) (device.Info, error) {
 	if selector == "" {
-		return target.PrimaryInput()
+		for _, mi := range target.Inputs() {
+			if mi.Role == device.RoleKeyboard {
+				return mi.Info, nil
+			}
+		}
+		return device.Info{}, fmt.Errorf("no keyboard-role interface declared for %04x:%04x", target.VendorID, target.ProductID)
 	}
 	page, usage, err := parseUsageSelector(selector)
 	if err != nil {
