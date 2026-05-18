@@ -1,10 +1,15 @@
 // Command probe lists HID devices visible to the host. With -stream
-// it opens the first recognized device's primary input interface and
-// dumps incoming reports until interrupted; -events additionally
-// decodes them into protocol.InputEvent JSON lines. The -usage
-// AAAA:BBBB flag overrides which interface to open by HID usage; the
-// -path flag overrides it by the exact platform path, useful when
-// two interfaces share a usage and ordering is non-deterministic.
+// it opens the first recognized device's input interfaces and dumps
+// activity until interrupted.
+//
+// Default mode with -events: opens every interface declared by the
+// device's registry entry in parallel and emits decoded
+// protocol.InputEvent JSON lines (keyboard + encoder, merged into one
+// output stream).
+//
+// Single-interface mode (with -usage or -path): opens just that one
+// interface — hex dump by default, JSON events with -events. Useful
+// for debugging unrecognized layouts.
 //
 // This is a development helper for KeyForge phase 1; not part of the
 // production binaries.
@@ -97,6 +102,14 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 	if !ok {
 		return errors.New("probe: no recognized device connected (run probe without -stream to list everything)")
 	}
+
+	if emitEvents && usageSelector == "" && pathSelector == "" {
+		return streamAllInputs(target)
+	}
+	return streamSingleInterface(target, emitEvents, usageSelector, pathSelector)
+}
+
+func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string) error {
 	iface, err := selectInterface(target, usageSelector, pathSelector)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
@@ -124,6 +137,41 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 	}
 
 	err = stream.Read(ctx, callback)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintln(os.Stderr, "\nstopped.")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("probe: %w", err)
+	}
+	return nil
+}
+
+func streamAllInputs(target device.IdentifiedDevice) error {
+	inputs := target.Inputs()
+	if len(inputs) == 0 {
+		return fmt.Errorf("probe: %04x:%04x exposes no declared inputs", target.VendorID, target.ProductID)
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Streaming %s (%04x:%04x) — %d input(s):\n",
+		target.Known.Name, target.VendorID, target.ProductID, len(inputs),
+	)
+	for _, in := range inputs {
+		_, _ = fmt.Fprintf(os.Stdout, "  - %-8s iface %d [usage %04x:%04x] %s\n",
+			in.Role, in.Info.Interface, in.Info.UsagePage, in.Info.Usage, in.Info.Path,
+		)
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "Press Ctrl-C to stop.")
+	_, _ = fmt.Fprintln(os.Stdout)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	deviceID := events.DeviceIDFor(target.VendorID, target.ProductID, inputs[0].Info.Serial)
+	encoder := json.NewEncoder(os.Stdout)
+	err := events.StreamAll(ctx, device.NewOpener(), deviceID, inputs, func(e protocol.InputEvent) error {
+		return encoder.Encode(e)
+	})
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		fmt.Fprintln(os.Stderr, "\nstopped.")
 		return nil
