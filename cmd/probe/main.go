@@ -2,8 +2,9 @@
 // it opens the first recognized device's primary input interface and
 // dumps incoming reports until interrupted; -events additionally
 // decodes them into protocol.InputEvent JSON lines. The -usage
-// AAAA:BBBB flag overrides which interface to open, letting operators
-// target alternative usages (e.g. Consumer Control for encoders).
+// AAAA:BBBB flag overrides which interface to open by HID usage; the
+// -path flag overrides it by the exact platform path, useful when
+// two interfaces share a usage and ordering is non-deterministic.
 //
 // This is a development helper for KeyForge phase 1; not part of the
 // production binaries.
@@ -42,6 +43,7 @@ func run(args []string) error {
 	stream := fs.Bool("stream", false, "open the first recognized device's primary input interface and dump reports")
 	emitEvents := fs.Bool("events", false, "with -stream, decode reports into protocol.InputEvent JSON lines instead of hex dump")
 	usageSelector := fs.String("usage", "", "with -stream, target the interface whose UsagePage:Usage equals AAAA:BBBB (hex, no 0x). Defaults to the primary keyboard interface.")
+	pathSelector := fs.String("path", "", "with -stream, target the interface whose platform path equals this exact value. Use when two interfaces share a usage. Mutually exclusive with -usage.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -50,6 +52,12 @@ func run(args []string) error {
 	}
 	if *usageSelector != "" && !*stream {
 		return errors.New("probe: -usage requires -stream")
+	}
+	if *pathSelector != "" && !*stream {
+		return errors.New("probe: -path requires -stream")
+	}
+	if *pathSelector != "" && *usageSelector != "" {
+		return errors.New("probe: -path and -usage are mutually exclusive")
 	}
 
 	infos, err := device.NewEnumerator().List(context.Background())
@@ -60,7 +68,7 @@ func run(args []string) error {
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
 	if *stream {
-		return streamFirstRecognized(identified, *emitEvents, *usageSelector)
+		return streamFirstRecognized(identified, *emitEvents, *usageSelector, *pathSelector)
 	}
 	return listAll(infos, identified)
 }
@@ -84,12 +92,12 @@ func listAll(infos []device.Info, identified []device.IdentifiedDevice) error {
 	return nil
 }
 
-func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool, usageSelector string) error {
+func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string) error {
 	target, ok := firstRecognized(identified)
 	if !ok {
 		return errors.New("probe: no recognized device connected (run probe without -stream to list everything)")
 	}
-	iface, err := selectInterface(target, usageSelector)
+	iface, err := selectInterface(target, usageSelector, pathSelector)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -126,31 +134,38 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 	return nil
 }
 
-// selectInterface picks the interface of target to stream from. When
-// selector is empty it returns the first interface tagged with the
-// keyboard role in target's registry-declared Inputs. When set, it
-// must parse as AAAA:BBBB hex and match one of target's interfaces by
-// UsagePage:Usage directly (bypassing the role layer; useful for
-// debugging unmapped interfaces).
-func selectInterface(target device.IdentifiedDevice, selector string) (device.Info, error) {
-	if selector == "" {
-		for _, mi := range target.Inputs() {
-			if mi.Role == device.RoleKeyboard {
-				return mi.Info, nil
+// selectInterface picks the interface of target to stream from. With
+// pathSel set it matches by exact platform path; with usageSel set it
+// matches by UsagePage:Usage and returns the first hit; with neither
+// it returns the first interface tagged with the keyboard role from
+// the registry. Callers enforce mutual exclusion of the two selectors.
+func selectInterface(target device.IdentifiedDevice, usageSel, pathSel string) (device.Info, error) {
+	if pathSel != "" {
+		for _, info := range target.Interfaces {
+			if info.Path == pathSel {
+				return info, nil
 			}
 		}
-		return device.Info{}, fmt.Errorf("no keyboard-role interface declared for %04x:%04x", target.VendorID, target.ProductID)
+		return device.Info{}, fmt.Errorf("no interface with path %q for %04x:%04x", pathSel, target.VendorID, target.ProductID)
 	}
-	page, usage, err := parseUsageSelector(selector)
-	if err != nil {
-		return device.Info{}, err
+	if usageSel != "" {
+		page, usage, err := parseUsageSelector(usageSel)
+		if err != nil {
+			return device.Info{}, err
+		}
+		for _, info := range target.Interfaces {
+			if info.UsagePage == page && info.Usage == usage {
+				return info, nil
+			}
+		}
+		return device.Info{}, fmt.Errorf("no interface with usage %04x:%04x for %04x:%04x", page, usage, target.VendorID, target.ProductID)
 	}
-	for _, info := range target.Interfaces {
-		if info.UsagePage == page && info.Usage == usage {
-			return info, nil
+	for _, mi := range target.Inputs() {
+		if mi.Role == device.RoleKeyboard {
+			return mi.Info, nil
 		}
 	}
-	return device.Info{}, fmt.Errorf("no interface with usage %04x:%04x for %04x:%04x", page, usage, target.VendorID, target.ProductID)
+	return device.Info{}, fmt.Errorf("no keyboard-role interface declared for %04x:%04x", target.VendorID, target.ProductID)
 }
 
 func parseUsageSelector(s string) (uint16, uint16, error) {
