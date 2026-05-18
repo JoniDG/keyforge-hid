@@ -114,60 +114,127 @@ func TestNewIdentifier_ShouldReturnNonNilImpl(t *testing.T) {
 	assert.NotNil(t, NewIdentifier(DefaultRegistry()))
 }
 
-func TestIdentifiedDevice_PrimaryInput_WhenKeyboardInterfacePresent_ShouldReturnIt(t *testing.T) {
+func TestIdentifiedDevice_Inputs_WhenKnownInputsEmpty_ShouldReturnEmpty(t *testing.T) {
 	t.Parallel()
 	d := IdentifiedDevice{
-		VendorID:  SideKeyboardKeypad.VendorID,
-		ProductID: SideKeyboardKeypad.ProductID,
+		Recognized: false,
 		Interfaces: []Info{
-			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor-specific"},
 			{UsagePage: 0x0001, Usage: 0x0006, Path: "keyboard"},
 		},
 	}
 
-	got, err := d.PrimaryInput()
+	got := d.Inputs()
 
-	require.NoError(t, err)
-	assert.Equal(t, "keyboard", got.Path)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
 }
 
-func TestIdentifiedDevice_PrimaryInput_WhenMultipleKeyboardInterfaces_ShouldReturnFirstSeen(t *testing.T) {
+func TestIdentifiedDevice_Inputs_WhenNoInterfaceMatches_ShouldReturnEmpty(t *testing.T) {
 	t.Parallel()
 	d := IdentifiedDevice{
+		Known: KnownDevice{
+			Inputs: []KnownInput{
+				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
+			},
+		},
 		Interfaces: []Info{
-			{UsagePage: 0x0001, Usage: 0x0006, Path: "first"},
-			{UsagePage: 0x0001, Usage: 0x0006, Path: "second"},
+			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor"},
 		},
 	}
 
-	got, err := d.PrimaryInput()
+	got := d.Inputs()
 
-	require.NoError(t, err)
-	assert.Equal(t, "first", got.Path)
+	assert.NotNil(t, got)
+	assert.Empty(t, got)
 }
 
-func TestIdentifiedDevice_PrimaryInput_WhenNoKeyboardInterface_ShouldReturnErrNoPrimaryInterface(t *testing.T) {
+func TestIdentifiedDevice_Inputs_WhenSingleMatch_ShouldReturnItTaggedWithRole(t *testing.T) {
 	t.Parallel()
 	d := IdentifiedDevice{
-		VendorID:  0xAAAA,
-		ProductID: 0xBBBB,
+		Known: KnownDevice{
+			Inputs: []KnownInput{
+				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
+			},
+		},
 		Interfaces: []Info{
-			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor-only"},
+			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor"},
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "keyboard"},
 		},
 	}
 
-	_, err := d.PrimaryInput()
+	got := d.Inputs()
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoPrimaryInterface)
+	require.Len(t, got, 1)
+	assert.Equal(t, "keyboard", got[0].Info.Path)
+	assert.Equal(t, RoleKeyboard, got[0].Role)
 }
 
-func TestIdentifiedDevice_PrimaryInput_WhenNoInterfaces_ShouldReturnErrNoPrimaryInterface(t *testing.T) {
+func TestIdentifiedDevice_Inputs_WhenMultipleInterfacesShareUsage_ShouldReturnAllInInfoOrder(t *testing.T) {
 	t.Parallel()
-	d := IdentifiedDevice{}
+	d := IdentifiedDevice{
+		Known: KnownDevice{
+			Inputs: []KnownInput{
+				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
+			},
+		},
+		Interfaces: []Info{
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "kb-a"},
+			{UsagePage: 0xFF00, Usage: 0x0002, Path: "vendor"},
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "kb-b"},
+		},
+	}
 
-	_, err := d.PrimaryInput()
+	got := d.Inputs()
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrNoPrimaryInterface)
+	require.Len(t, got, 2)
+	assert.Equal(t, "kb-a", got[0].Info.Path)
+	assert.Equal(t, "kb-b", got[1].Info.Path)
+	assert.Equal(t, RoleKeyboard, got[0].Role)
+	assert.Equal(t, RoleKeyboard, got[1].Role)
+}
+
+func TestIdentifiedDevice_Inputs_ShouldOrderByKnownInputDeclarationFirst(t *testing.T) {
+	t.Parallel()
+	// Interfaces arrive in encoder-then-keyboard order, but the
+	// declaration order puts keyboard first, so the result follows it.
+	d := IdentifiedDevice{
+		Known: KnownDevice{
+			Inputs: []KnownInput{
+				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
+				{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001},
+			},
+		},
+		Interfaces: []Info{
+			{UsagePage: 0x000c, Usage: 0x0001, Path: "encoder"},
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "keyboard"},
+		},
+	}
+
+	got := d.Inputs()
+
+	require.Len(t, got, 2)
+	assert.Equal(t, RoleKeyboard, got[0].Role)
+	assert.Equal(t, "keyboard", got[0].Info.Path)
+	assert.Equal(t, RoleEncoder, got[1].Role)
+	assert.Equal(t, "encoder", got[1].Info.Path)
+}
+
+func TestIdentifiedDevice_Inputs_WhenTwoKnownInputsShareUsage_ShouldEmitInfoOnceWithFirstRole(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{
+		Known: KnownDevice{
+			Inputs: []KnownInput{
+				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
+				{Role: RoleEncoder, UsagePage: 0x0001, Usage: 0x0006},
+			},
+		},
+		Interfaces: []Info{
+			{UsagePage: 0x0001, Usage: 0x0006, Path: "shared"},
+		},
+	}
+
+	got := d.Inputs()
+
+	require.Len(t, got, 1)
+	assert.Equal(t, RoleKeyboard, got[0].Role)
 }

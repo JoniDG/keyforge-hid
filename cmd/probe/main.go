@@ -1,7 +1,15 @@
 // Command probe lists HID devices visible to the host. With -stream
-// it opens the first recognized device's primary input interface and
-// dumps incoming reports until interrupted; -events additionally
-// decodes them into protocol.InputEvent JSON lines.
+// it opens the first recognized device's input interfaces and dumps
+// activity until interrupted.
+//
+// Default mode with -events: opens every interface declared by the
+// device's registry entry in parallel and emits decoded
+// protocol.InputEvent JSON lines (keyboard + encoder, merged into one
+// output stream).
+//
+// Single-interface mode (with -usage or -path): opens just that one
+// interface — hex dump by default, JSON events with -events. Useful
+// for debugging unrecognized layouts.
 //
 // This is a development helper for KeyForge phase 1; not part of the
 // production binaries.
@@ -17,6 +25,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -38,11 +47,22 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
 	stream := fs.Bool("stream", false, "open the first recognized device's primary input interface and dump reports")
 	emitEvents := fs.Bool("events", false, "with -stream, decode reports into protocol.InputEvent JSON lines instead of hex dump")
+	usageSelector := fs.String("usage", "", "with -stream, target the interface whose UsagePage:Usage equals AAAA:BBBB (hex, no 0x). Defaults to the primary keyboard interface.")
+	pathSelector := fs.String("path", "", "with -stream, target the interface whose platform path equals this exact value. Use when two interfaces share a usage. Mutually exclusive with -usage.")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
 	if *emitEvents && !*stream {
 		return errors.New("probe: -events requires -stream")
+	}
+	if *usageSelector != "" && !*stream {
+		return errors.New("probe: -usage requires -stream")
+	}
+	if *pathSelector != "" && !*stream {
+		return errors.New("probe: -path requires -stream")
+	}
+	if *pathSelector != "" && *usageSelector != "" {
+		return errors.New("probe: -path and -usage are mutually exclusive")
 	}
 
 	infos, err := device.NewEnumerator().List(context.Background())
@@ -53,7 +73,7 @@ func run(args []string) error {
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
 	if *stream {
-		return streamFirstRecognized(identified, *emitEvents)
+		return streamFirstRecognized(identified, *emitEvents, *usageSelector, *pathSelector)
 	}
 	return listAll(infos, identified)
 }
@@ -77,17 +97,25 @@ func listAll(infos []device.Info, identified []device.IdentifiedDevice) error {
 	return nil
 }
 
-func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool) error {
+func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string) error {
 	target, ok := firstRecognized(identified)
 	if !ok {
 		return errors.New("probe: no recognized device connected (run probe without -stream to list everything)")
 	}
-	primary, err := target.PrimaryInput()
+
+	if emitEvents && usageSelector == "" && pathSelector == "" {
+		return streamAllInputs(target)
+	}
+	return streamSingleInterface(target, emitEvents, usageSelector, pathSelector)
+}
+
+func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usageSelector, pathSelector string) error {
+	iface, err := selectInterface(target, usageSelector, pathSelector)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
 
-	stream, err := device.NewOpener().Open(primary.Path)
+	stream, err := device.NewOpener().Open(iface.Path)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -95,7 +123,7 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 
 	_, _ = fmt.Fprintf(os.Stdout, "Streaming %s (%04x:%04x) iface %d [usage %04x:%04x]\n",
 		target.Known.Name, target.VendorID, target.ProductID,
-		primary.Interface, primary.UsagePage, primary.Usage,
+		iface.Interface, iface.UsagePage, iface.Usage,
 	)
 	_, _ = fmt.Fprintln(os.Stdout, "Press Ctrl-C to stop.")
 	_, _ = fmt.Fprintln(os.Stdout)
@@ -105,7 +133,7 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 
 	callback := newHexDumpCallback(time.Now())
 	if emitEvents {
-		callback = newEventsCallback(events.DeviceIDFor(target.VendorID, target.ProductID, primary.Serial))
+		callback = newEventsCallback(events.DeviceIDFor(target.VendorID, target.ProductID, iface.Serial))
 	}
 
 	err = stream.Read(ctx, callback)
@@ -117,6 +145,91 @@ func streamFirstRecognized(identified []device.IdentifiedDevice, emitEvents bool
 		return fmt.Errorf("probe: %w", err)
 	}
 	return nil
+}
+
+func streamAllInputs(target device.IdentifiedDevice) error {
+	inputs := target.Inputs()
+	if len(inputs) == 0 {
+		return fmt.Errorf("probe: %04x:%04x exposes no declared inputs", target.VendorID, target.ProductID)
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "Streaming %s (%04x:%04x) — %d input(s):\n",
+		target.Known.Name, target.VendorID, target.ProductID, len(inputs),
+	)
+	for _, in := range inputs {
+		_, _ = fmt.Fprintf(os.Stdout, "  - %-8s iface %d [usage %04x:%04x] %s\n",
+			in.Role, in.Info.Interface, in.Info.UsagePage, in.Info.Usage, in.Info.Path,
+		)
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "Press Ctrl-C to stop.")
+	_, _ = fmt.Fprintln(os.Stdout)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	deviceID := events.DeviceIDFor(target.VendorID, target.ProductID, inputs[0].Info.Serial)
+	encoder := json.NewEncoder(os.Stdout)
+	err := events.StreamAll(ctx, device.NewOpener(), deviceID, inputs, func(e protocol.InputEvent) error {
+		return encoder.Encode(e)
+	})
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		fmt.Fprintln(os.Stderr, "\nstopped.")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("probe: %w", err)
+	}
+	return nil
+}
+
+// selectInterface picks the interface of target to stream from. With
+// pathSel set it matches by exact platform path; with usageSel set it
+// matches by UsagePage:Usage and returns the first hit; with neither
+// it returns the first interface tagged with the keyboard role from
+// the registry. Callers enforce mutual exclusion of the two selectors.
+func selectInterface(target device.IdentifiedDevice, usageSel, pathSel string) (device.Info, error) {
+	if pathSel != "" {
+		for _, info := range target.Interfaces {
+			if info.Path == pathSel {
+				return info, nil
+			}
+		}
+		return device.Info{}, fmt.Errorf("no interface with path %q for %04x:%04x", pathSel, target.VendorID, target.ProductID)
+	}
+	if usageSel != "" {
+		page, usage, err := parseUsageSelector(usageSel)
+		if err != nil {
+			return device.Info{}, err
+		}
+		for _, info := range target.Interfaces {
+			if info.UsagePage == page && info.Usage == usage {
+				return info, nil
+			}
+		}
+		return device.Info{}, fmt.Errorf("no interface with usage %04x:%04x for %04x:%04x", page, usage, target.VendorID, target.ProductID)
+	}
+	for _, mi := range target.Inputs() {
+		if mi.Role == device.RoleKeyboard {
+			return mi.Info, nil
+		}
+	}
+	return device.Info{}, fmt.Errorf("no keyboard-role interface declared for %04x:%04x", target.VendorID, target.ProductID)
+}
+
+func parseUsageSelector(s string) (uint16, uint16, error) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return 0, 0, fmt.Errorf("invalid usage selector %q (want AAAA:BBBB hex)", s)
+	}
+	page, err := strconv.ParseUint(parts[0], 16, 16)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid usage page %q: %w", parts[0], err)
+	}
+	usage, err := strconv.ParseUint(parts[1], 16, 16)
+	if err != nil {
+		return 0, 0, fmt.Errorf("invalid usage %q: %w", parts[1], err)
+	}
+	return uint16(page), uint16(usage), nil
 }
 
 func newHexDumpCallback(start time.Time) func([]byte) error {

@@ -1,14 +1,5 @@
 package device
 
-import "fmt"
-
-// HID usage page and usage values for the standard keyboard interface,
-// per the HID Usage Tables (Generic Desktop / Keyboard).
-const (
-	usagePageGenericDesktop uint16 = 0x0001
-	usageKeyboard           uint16 = 0x0006
-)
-
 // IdentifiedDevice groups every Info reported by enumeration that
 // shares a (VendorID, ProductID) pair, plus the registry metadata when
 // the device is recognized.
@@ -23,18 +14,43 @@ type IdentifiedDevice struct {
 	Interfaces []Info
 }
 
-// PrimaryInput returns the interface that should be used to receive
-// keyboard-style input reports for this device. It picks the first
-// interface whose HID descriptor reports a Generic Desktop / Keyboard
-// usage. When none of the interfaces qualify, ErrNoPrimaryInterface
-// is returned and the caller has to choose explicitly.
-func (d IdentifiedDevice) PrimaryInput() (Info, error) {
-	for _, iface := range d.Interfaces {
-		if iface.UsagePage == usagePageGenericDesktop && iface.Usage == usageKeyboard {
-			return iface, nil
+// MatchedInput pairs an enumerated Info with the semantic Role declared
+// for it by the KnownDevice's registry entry.
+type MatchedInput struct {
+	Info Info
+	Role InputRole
+}
+
+// Inputs returns every interface of the device that matches one of the
+// (UsagePage, Usage) pairs declared in Known.Inputs, tagged with the
+// matching Role.
+//
+// Results are ordered by KnownInput declaration order (outer) and then
+// by the original Info order within each match group (inner) so the
+// stream is deterministic across kernel re-enumeration. Each Info is
+// returned at most once: if two KnownInputs declare the same usage,
+// the first one wins.
+//
+// When the device is not recognized or has no declared inputs, the
+// result is an empty (non-nil) slice.
+func (d IdentifiedDevice) Inputs() []MatchedInput {
+	if len(d.Known.Inputs) == 0 {
+		return []MatchedInput{}
+	}
+	out := make([]MatchedInput, 0, len(d.Interfaces))
+	consumed := make(map[int]bool, len(d.Interfaces))
+	for _, ki := range d.Known.Inputs {
+		for i, info := range d.Interfaces {
+			if consumed[i] {
+				continue
+			}
+			if info.UsagePage == ki.UsagePage && info.Usage == ki.Usage {
+				out = append(out, MatchedInput{Info: info, Role: ki.Role})
+				consumed[i] = true
+			}
 		}
 	}
-	return Info{}, fmt.Errorf("device.PrimaryInput %04x:%04x: %w", d.VendorID, d.ProductID, ErrNoPrimaryInterface)
+	return out
 }
 
 // Identifier groups enumerated Info entries by (VendorID, ProductID)

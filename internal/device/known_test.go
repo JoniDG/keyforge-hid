@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRegistry_Lookup_WhenDeviceRegistered_ShouldReturnIt(t *testing.T) {
@@ -62,4 +63,12 @@ func TestSideKeyboardKeypad_HasExpectedVIDPID(t *testing.T) {
 	assert.Equal(t, uint16(0x6D82), SideKeyboardKeypad.VendorID)
 	assert.Equal(t, uint16(0xDC83), SideKeyboardKeypad.ProductID)
 	assert.Equal(t, "SDINNOVATION SIDE-KEYBOARD", SideKeyboardKeypad.Name)
+}
+
+func TestSideKeyboardKeypad_DeclaresKeyboardAndEncoderInputs(t *testing.T) {
+	t.Parallel()
+	require.Len(t, SideKeyboardKeypad.Inputs, 2)
+
+	assert.Equal(t, KnownInput{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006}, SideKeyboardKeypad.Inputs[0])
+	assert.Equal(t, KnownInput{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001}, SideKeyboardKeypad.Inputs[1])
 }
