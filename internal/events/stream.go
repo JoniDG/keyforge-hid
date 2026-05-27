@@ -68,7 +68,7 @@ func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protoco
 	var wg sync.WaitGroup
 	for i := range specs {
 		wg.Add(1)
-		go runReader(ctx, &wg, specs[i].stream, specs[i].mappers, eventsCh, readErrs)
+		go runReader(ctx, cancel, &wg, specs[i].stream, specs[i].mappers, eventsCh, readErrs)
 	}
 	go func() {
 		wg.Wait()
@@ -97,7 +97,7 @@ func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protoco
 	return parentCtx.Err()
 }
 
-func runReader(ctx context.Context, wg *sync.WaitGroup, stream device.InputStream, mappers []reportMapper, events chan<- protocol.InputEvent, errs chan<- error) {
+func runReader(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGroup, stream device.InputStream, mappers []reportMapper, events chan<- protocol.InputEvent, errs chan<- error) {
 	defer wg.Done()
 	err := stream.Read(ctx, func(report []byte) error {
 		for _, mapper := range mappers {
@@ -120,6 +120,10 @@ func runReader(ctx context.Context, wg *sync.WaitGroup, stream device.InputStrea
 	})
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		errs <- err
+		// Stop the sibling readers so wg.Wait can complete and eventsCh
+		// can close; otherwise readers still blocked on ctx would hang
+		// StreamAll forever instead of letting this error propagate.
+		cancel()
 	}
 }
 

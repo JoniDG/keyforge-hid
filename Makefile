@@ -8,8 +8,8 @@ help: ## Show this help
 build: ## Compile cmd/probe
 	go build -o bin/probe ./cmd/probe
 
-test: ## Run unit tests with coverage (excludes cmd/)
-	go test -race -coverprofile=coverage.out -covermode=atomic ./internal/...
+test: ## Run unit tests with coverage (root package + internal/, excludes cmd/)
+	go test -race -coverprofile=coverage.out -covermode=atomic . ./internal/...
 	@echo "---"
 	@go tool cover -func=coverage.out | tail -1
 
