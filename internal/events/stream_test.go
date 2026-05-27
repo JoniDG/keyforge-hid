@@ -328,6 +328,38 @@ func TestStreamAll_WhenReaderReturnsFatalError_ShouldPropagate(t *testing.T) {
 	assert.ErrorIs(t, err, boom)
 }
 
+func TestStreamAll_WhenOneOfMultipleReadersFails_ShouldCancelOthersAndPropagate(t *testing.T) {
+	t.Parallel()
+	// Two distinct paths => two readers (the reference keypad's boot
+	// keyboard + Consumer Control topology). One fails immediately; the
+	// other blocks on ctx. The failing reader must cancel the shared
+	// context so the blocked reader unblocks and wg.Wait completes;
+	// otherwise StreamAll deadlocks instead of propagating the error.
+	boom := errors.New("reader boom")
+	opener := &stubOpener{
+		streams: map[string]device.InputStream{
+			"kb":  &errStream{errReturn: boom},
+			"enc": newStubStream(),
+		},
+	}
+	inputs := []device.MatchedInput{
+		{Info: device.Info{Path: "kb"}, Role: device.RoleKeyboard},
+		{Info: device.Info{Path: "enc"}, Role: device.RoleEncoder},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- StreamAll(context.Background(), opener, testDeviceID, inputs, func(_ protocol.InputEvent) error { return nil })
+	}()
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, boom)
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamAll deadlocked: a failing reader did not cancel the others")
+	}
+}
+
 func TestStreamAll_WhenKeyboardEmitsShortReport_ShouldSkipSilentlyAndContinue(t *testing.T) {
 	t.Parallel()
 	opener := &stubOpener{
@@ -368,7 +400,7 @@ func TestRunReader_WhenMapperReturnsNonShortError_ShouldEnqueueOnErrs(t *testing
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	runReader(ctx, &wg, stream, []reportMapper{mapper}, events, errs)
+	runReader(ctx, cancel, &wg, stream, []reportMapper{mapper}, events, errs)
 	wg.Wait()
 
 	select {
@@ -393,7 +425,7 @@ func TestRunReader_WhenContextCancelledDuringSend_ShouldReturnWithoutEnqueueingE
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	go runReader(ctx, &wg, stream, []reportMapper{mapper}, events, errs)
+	go runReader(ctx, cancel, &wg, stream, []reportMapper{mapper}, events, errs)
 
 	time.Sleep(20 * time.Millisecond)
 	cancel()

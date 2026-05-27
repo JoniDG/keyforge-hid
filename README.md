@@ -6,7 +6,7 @@
 
 ## Status
 
-🚧 **Pre-alpha.** Phase 1.a in progress: HID enumeration works; input streaming, identification and event mapping are next.
+🚧 **Pre-alpha.** Enumeration, VID/PID identification, input streaming and event mapping (keyboard + encoders) work. A public `hid` package now exposes them so other modules (e.g. `keyforge-core`) can consume decoded events without reaching into `internal/`.
 
 ## Build prerequisites
 
@@ -86,10 +86,60 @@ Reading raw HID reports from a keyboard-class interface requires elevated privil
 
 Hijacking the keystrokes so the OS does not also receive them is a separate concern, tracked as a TBD in the project plan and resolved in a later phase.
 
+## Using it as a library
+
+The root `hid` package is the importable entry point. `Discover` reports the
+recognized keypad (and the `DeviceID` its events will carry) before streaming;
+`Stream` blocks delivering decoded `protocol.InputEvent` values until the
+context is cancelled, the sink returns an error, or a reader fails.
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+
+	"github.com/JoniDG/keyforge-hid"
+	"github.com/JoniDG/keyforge-protocol/go/protocol"
+)
+
+func main() {
+	src := hid.New() // hid.New(hid.WithSeize(true)) to take over the device (needs privileges)
+
+	dev, err := src.Discover()
+	if errors.Is(err, hid.ErrNoRecognizedDevice) {
+		fmt.Println("plug in a recognized keypad")
+		return
+	} else if err != nil {
+		panic(err)
+	}
+	fmt.Printf("streaming %s (%s)\n", dev.Name, dev.ID)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := src.Stream(ctx, func(e protocol.InputEvent) error {
+		fmt.Printf("%s %s\n", e.Action, e.InputId)
+		return nil
+	}); err != nil {
+		panic(err)
+	}
+}
+```
+
+Seizing the device (so the OS stops receiving its reports) is opt-in via
+`WithSeize(true)` and needs the elevated privileges described under
+[OS permissions](#os-permissions); the default keeps shared access.
+
 ## Layout
 
 | Path | Purpose |
 |---|---|
+| `source.go` (package `hid`) | Public API: discover the recognized keypad and stream its decoded events |
 | `cmd/probe/main.go` | CLI for manual device discovery and event inspection |
 | `internal/device/` | Enumeration, identification, open/close lifecycle |
 | `internal/events/` | Mapping from raw input reports to typed events |

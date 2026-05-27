@@ -23,11 +23,22 @@ Capa de hardware: enumera dispositivos HID conectados, los identifica por VID/PI
 
 ## Layout
 ```
+source.go              → API pública (package hid): Discover() + Stream(), envuelve el pipeline interno
 cmd/probe/main.go      → binario chiquito para probar detección y eventos en consola
 internal/
   device/              → enumeración, identificación (VID/PID), apertura
   events/              → mapping de raw input reports a InputEvent
 ```
+
+## API pública
+El package raíz `hid` (`github.com/JoniDG/keyforge-hid`) es la única superficie importable por otros módulos (p.ej. `keyforge-core`). `internal/` no es importable desde afuera por diseño.
+
+- `hid.New(opts ...Option) *Source` — wirea el pipeline real (enumerator + identifier con `DefaultRegistry` + opener).
+- `Source.Discover() (Device, error)` — primer device reconocido; `Device.ID` es el `protocol.DeviceID` que van a llevar los eventos (lo necesita core para armar bindings antes de streamear). Devuelve `ErrNoRecognizedDevice` si no hay ninguno conectado.
+- `Source.Stream(ctx, func(protocol.InputEvent) error) error` — bloquea hasta cancelación del ctx (devuelve `nil`), error del sink, o fallo de un reader (ambos se propagan).
+- `WithSeize(bool)` — opción de seize; **default `false`** (sin privilegios). Con `true`, `Stream` falla si la plataforma no soporta seize en vez de degradar a shared en silencio.
+
+Los seams (`enumerator`/`identifier`/`opener`/`setSeize`) son inyectables vía fields no exportados para que los tests corran sin hidapi/cgo (CI no tiene hardware).
 
 ## Comandos
 ```bash
