@@ -90,8 +90,11 @@ Hijacking the keystrokes so the OS does not also receive them is a separate conc
 
 The root `hid` package is the importable entry point. `Discover` reports the
 recognized keypad (and the `DeviceID` its events will carry) before streaming;
-`Stream` blocks delivering decoded `protocol.InputEvent` values until the
-context is cancelled, the sink returns an error, or a reader fails.
+`DiscoverDevice` returns the same device as a fully populated
+`protocol.Device` (VID/PID, path, and the logical input catalog) so a consumer
+can persist and describe it without opening it; `Stream` blocks delivering
+decoded `protocol.InputEvent` values until the context is cancelled, the sink
+returns an error, or a reader fails.
 
 ```go
 package main

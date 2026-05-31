@@ -79,7 +79,24 @@ func (s *Source) Discover() (Device, error) {
 	if err != nil {
 		return Device{}, err
 	}
-	return r.device, nil
+	return Device{ID: r.id, Name: r.target.Known.Name}, nil
+}
+
+// DiscoverDevice enumerates connected HID devices and returns the first
+// one the registry recognizes as a fully populated protocol.Device, or
+// ErrNoRecognizedDevice when none is connected. Unlike Discover it does
+// not require streaming, so callers (notably keyforge-core's daemon) can
+// persist the device and serve its catalog at startup without opening it.
+//
+// The returned Device.Id matches the one Discover reports and every
+// InputEvent Stream carries; Inputs is the device's curated logical input
+// catalog. VendorId/ProductId are lowercase 4-digit hex with no 0x prefix.
+func (s *Source) DiscoverDevice() (protocol.Device, error) {
+	r, err := s.resolve(context.Background())
+	if err != nil {
+		return protocol.Device{}, err
+	}
+	return toProtocolDevice(r.target, r.id), nil
 }
 
 // Stream discovers the recognized keypad and delivers its decoded input
@@ -98,7 +115,7 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	if err := s.setSeize(s.seize); err != nil {
 		return fmt.Errorf("hid.Stream: %w", err)
 	}
-	err = events.StreamAll(ctx, s.opener, r.device.ID, r.inputs, sink)
+	err = events.StreamAll(ctx, s.opener, r.id, r.inputs, sink)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}
@@ -108,10 +125,12 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	return nil
 }
 
-// resolved bundles the recognized device with the decodable inputs that
-// back its event stream, so Discover and Stream agree on the DeviceID.
+// resolved bundles the recognized device with the DeviceID derived from
+// it and the decodable inputs that back its event stream, so Discover,
+// DiscoverDevice and Stream all agree on the same identity.
 type resolved struct {
-	device Device
+	target device.IdentifiedDevice
+	id     protocol.DeviceID
 	inputs []device.MatchedInput
 }
 
@@ -130,9 +149,50 @@ func (s *Source) resolve(ctx context.Context) (resolved, error) {
 	// stable seed for the DeviceID that both Discover and Stream agree on.
 	deviceID := events.DeviceIDFor(target.VendorID, target.ProductID, target.Interfaces[0].Serial)
 	return resolved{
-		device: Device{ID: deviceID, Name: target.Known.Name},
+		target: target,
+		id:     deviceID,
 		inputs: target.Inputs(),
 	}, nil
+}
+
+// toProtocolDevice maps a recognized device to the protocol.Device shape
+// keyforge-core persists and serves. VendorID/ProductID become lowercase
+// 4-digit hex (the schema's ^[0-9A-Fa-f]{4}$ form); Path, Manufacturer,
+// Product and Serial come from Interfaces[0], the same interface that
+// seeds the DeviceID. The optional descriptor strings are omitted when
+// empty (cheap clones often leave them blank, and Serial is unset until a
+// stream starts on macOS). Inputs is the device's curated logical catalog.
+func toProtocolDevice(d device.IdentifiedDevice, id protocol.DeviceID) protocol.Device {
+	iface := d.Interfaces[0]
+	return protocol.Device{
+		Id:           id,
+		VendorId:     fmt.Sprintf("%04x", d.VendorID),
+		ProductId:    fmt.Sprintf("%04x", d.ProductID),
+		Path:         iface.Path,
+		Inputs:       copyInputs(d.Known.Controls),
+		Manufacturer: optionalString(iface.Manufacturer),
+		Product:      optionalString(iface.Product),
+		SerialNumber: optionalString(iface.Serial),
+	}
+}
+
+// copyInputs returns a fresh non-nil slice over the catalog entries:
+// mutating the returned slice (append, or reassigning an entry's value
+// fields) can't disturb the shared registry entry, and the required
+// "inputs" field always marshals as an array rather than null.
+func copyInputs(src []protocol.Input) []protocol.Input {
+	out := make([]protocol.Input, len(src))
+	copy(out, src)
+	return out
+}
+
+// optionalString returns a pointer to s, or nil when s is empty, matching
+// the omitempty optional descriptor fields on protocol.Device.
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func firstRecognized(devices []device.IdentifiedDevice) (device.IdentifiedDevice, bool) {

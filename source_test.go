@@ -184,6 +184,87 @@ func TestDiscover_WhenEnumerationFails_ShouldWrapError(t *testing.T) {
 	assert.ErrorIs(t, err, boom)
 }
 
+func TestDiscoverDevice_WhenDeviceRecognized_ShouldReturnFullProtocolDevice(t *testing.T) {
+	t.Parallel()
+	enum := fakeEnumerator{infos: []device.Info{keyboardInfo("kb", ""), encoderInfo("enc", "")}}
+	s := newSource(enum, &stubOpener{})
+
+	dev, err := s.DiscoverDevice()
+
+	require.NoError(t, err)
+	assert.Equal(t, testDeviceID, dev.Id)
+	assert.Equal(t, "6d82", dev.VendorId)
+	assert.Equal(t, "dc83", dev.ProductId)
+	assert.Equal(t, "kb", dev.Path)
+	assert.Equal(t, device.SideKeyboardKeypad.Controls, dev.Inputs)
+}
+
+func TestDiscoverDevice_WhenDescriptorStringsPresent_ShouldPopulateOptionalFields(t *testing.T) {
+	t.Parallel()
+	kb := keyboardInfo("kb", "S1")
+	kb.Manufacturer = "SDINNOVATION"
+	kb.Product = "SIDE-KEYBOARD"
+	enum := fakeEnumerator{infos: []device.Info{kb, encoderInfo("enc", "S1")}}
+	s := newSource(enum, &stubOpener{})
+
+	dev, err := s.DiscoverDevice()
+
+	require.NoError(t, err)
+	assert.Equal(t, protocol.DeviceID("VID_6D82_PID_DC83_S1"), dev.Id)
+	require.NotNil(t, dev.Manufacturer)
+	assert.Equal(t, "SDINNOVATION", *dev.Manufacturer)
+	require.NotNil(t, dev.Product)
+	assert.Equal(t, "SIDE-KEYBOARD", *dev.Product)
+	require.NotNil(t, dev.SerialNumber)
+	assert.Equal(t, "S1", *dev.SerialNumber)
+}
+
+func TestDiscoverDevice_WhenDescriptorStringsEmpty_ShouldOmitOptionalFields(t *testing.T) {
+	t.Parallel()
+	enum := fakeEnumerator{infos: []device.Info{keyboardInfo("kb", ""), encoderInfo("enc", "")}}
+	s := newSource(enum, &stubOpener{})
+
+	dev, err := s.DiscoverDevice()
+
+	require.NoError(t, err)
+	assert.Nil(t, dev.Manufacturer)
+	assert.Nil(t, dev.Product)
+	assert.Nil(t, dev.SerialNumber)
+}
+
+func TestDiscoverDevice_ShouldReturnInputsClientsCannotMutateRegistry(t *testing.T) {
+	t.Parallel()
+	enum := fakeEnumerator{infos: []device.Info{keyboardInfo("kb", ""), encoderInfo("enc", "")}}
+	s := newSource(enum, &stubOpener{})
+
+	dev, err := s.DiscoverDevice()
+	require.NoError(t, err)
+	require.NotEmpty(t, dev.Inputs)
+
+	dev.Inputs[0].Id = "mutated"
+	assert.Equal(t, "mod_lctrl", device.SideKeyboardKeypad.Controls[0].Id)
+}
+
+func TestDiscoverDevice_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {
+	t.Parallel()
+	enum := fakeEnumerator{infos: []device.Info{{Path: "x", VendorID: 0x1111, ProductID: 0x2222}}}
+	s := newSource(enum, &stubOpener{})
+
+	_, err := s.DiscoverDevice()
+
+	assert.ErrorIs(t, err, ErrNoRecognizedDevice)
+}
+
+func TestDiscoverDevice_WhenEnumerationFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("enumerate boom")
+	s := newSource(fakeEnumerator{err: boom}, &stubOpener{})
+
+	_, err := s.DiscoverDevice()
+
+	assert.ErrorIs(t, err, boom)
+}
+
 func TestStream_WhenKeyboardReportArrives_ShouldDeliverEventTaggedWithDeviceID(t *testing.T) {
 	t.Parallel()
 	opener := &stubOpener{streams: map[string]device.InputStream{
