@@ -3,6 +3,7 @@ package device
 import (
 	"testing"
 
+	"github.com/JoniDG/keyforge-protocol/go/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,4 +72,31 @@ func TestSideKeyboardKeypad_DeclaresKeyboardAndEncoderInputs(t *testing.T) {
 
 	assert.Equal(t, KnownInput{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006}, SideKeyboardKeypad.Inputs[0])
 	assert.Equal(t, KnownInput{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001}, SideKeyboardKeypad.Inputs[1])
+}
+
+func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
+	t.Parallel()
+	require.Len(t, SideKeyboardKeypad.Controls, 2)
+
+	key := SideKeyboardKeypad.Controls[0]
+	assert.Equal(t, "key_0x04", key.Id)
+	assert.Equal(t, protocol.InputKindKey, key.Kind)
+	require.NotNil(t, key.Label)
+	assert.Equal(t, "Key", *key.Label)
+
+	enc := SideKeyboardKeypad.Controls[1]
+	assert.Equal(t, "encoder_0", enc.Id)
+	assert.Equal(t, protocol.InputKindEncoder, enc.Kind)
+	require.NotNil(t, enc.Label)
+	assert.Equal(t, "Encoder", *enc.Label)
+}
+
+func TestControl_ShouldSetLabelPointer(t *testing.T) {
+	t.Parallel()
+	got := control("encoder_0", protocol.InputKindEncoder, "Encoder")
+
+	assert.Equal(t, "encoder_0", got.Id)
+	assert.Equal(t, protocol.InputKindEncoder, got.Kind)
+	require.NotNil(t, got.Label)
+	assert.Equal(t, "Encoder", *got.Label)
 }
