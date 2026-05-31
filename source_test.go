@@ -242,7 +242,7 @@ func TestDiscoverDevice_ShouldReturnInputsClientsCannotMutateRegistry(t *testing
 	require.NotEmpty(t, dev.Inputs)
 
 	dev.Inputs[0].Id = "mutated"
-	assert.Equal(t, "key_0x04", device.SideKeyboardKeypad.Controls[0].Id)
+	assert.Equal(t, "mod_lctrl", device.SideKeyboardKeypad.Controls[0].Id)
 }
 
 func TestDiscoverDevice_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {

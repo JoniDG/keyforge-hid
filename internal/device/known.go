@@ -70,12 +70,15 @@ var SideKeyboardKeypad = KnownDevice{
 		{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
 		{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001},
 	},
-	// Factory firmware collapses all ten keys onto the Ctrl+A chord
-	// (keycode 0x04) and both encoders onto a single Consumer Control
-	// stream, so the bindable catalog is two logical inputs until the
-	// vendor protocol is reversed (Fase 7.a) and the keys/encoders can
-	// be reprogrammed to distinct codes. See docs/hid-device-keyforge-keypad.md.
+	// Factory firmware collapses all ten keys onto the Ctrl+A chord and
+	// both encoders onto a single Consumer Control stream, so the bindable
+	// catalog stays small until the vendor protocol is reversed (Fase 7.a)
+	// and the keys/encoders can be reprogrammed to distinct codes. Pressing
+	// any key emits the chord as two events in this order — the Left Ctrl
+	// modifier then keycode 0x04 — so both are declared. See
+	// docs/hid-device-keyforge-keypad.md.
 	Controls: []protocol.Input{
+		control("mod_lctrl", protocol.InputKindKey, "Left Ctrl"),
 		control("key_0x04", protocol.InputKindKey, "Key"),
 		control("encoder_0", protocol.InputKindEncoder, "Encoder"),
 	},

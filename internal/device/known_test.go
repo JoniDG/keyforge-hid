@@ -76,15 +76,21 @@ func TestSideKeyboardKeypad_DeclaresKeyboardAndEncoderInputs(t *testing.T) {
 
 func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
 	t.Parallel()
-	require.Len(t, SideKeyboardKeypad.Controls, 2)
+	require.Len(t, SideKeyboardKeypad.Controls, 3)
 
-	key := SideKeyboardKeypad.Controls[0]
+	mod := SideKeyboardKeypad.Controls[0]
+	assert.Equal(t, "mod_lctrl", mod.Id)
+	assert.Equal(t, protocol.InputKindKey, mod.Kind)
+	require.NotNil(t, mod.Label)
+	assert.Equal(t, "Left Ctrl", *mod.Label)
+
+	key := SideKeyboardKeypad.Controls[1]
 	assert.Equal(t, "key_0x04", key.Id)
 	assert.Equal(t, protocol.InputKindKey, key.Kind)
 	require.NotNil(t, key.Label)
 	assert.Equal(t, "Key", *key.Label)
 
-	enc := SideKeyboardKeypad.Controls[1]
+	enc := SideKeyboardKeypad.Controls[2]
 	assert.Equal(t, "encoder_0", enc.Id)
 	assert.Equal(t, protocol.InputKindEncoder, enc.Kind)
 	require.NotNil(t, enc.Label)
