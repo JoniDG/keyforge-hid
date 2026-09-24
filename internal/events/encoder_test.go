@@ -94,11 +94,42 @@ func TestEncoderMapper_Map_OnUnknownUsage_ShouldEmitNothing(t *testing.T) {
 	t.Parallel()
 	m := newTestEncoderMapper(t, 0)
 
-	got, err := m.Map([]byte{0x03, 0xCD, 0x00})
+	got, err := m.Map([]byte{0x03, 0x30, 0x00}) // Power: not an encoder usage
 
 	require.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Empty(t, got)
+}
+
+func TestEncoderMapper_Map_OnEachEncoderUsage_ShouldEmitItsEncoderAndAction(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		usage  [2]byte
+		id     string
+		action protocol.InputAction
+	}{
+		{name: "encoder 1 click (mute)", usage: [2]byte{0xE2, 0x00}, id: "encoder_0", action: protocol.InputActionClick},
+		{name: "encoder 1 cw (volume up)", usage: [2]byte{0xE9, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCw},
+		{name: "encoder 1 ccw (volume down)", usage: [2]byte{0xEA, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCcw},
+		{name: "encoder 2 click (play/pause)", usage: [2]byte{0xCD, 0x00}, id: "encoder_1", action: protocol.InputActionClick},
+		{name: "encoder 2 cw (next track)", usage: [2]byte{0xB5, 0x00}, id: "encoder_1", action: protocol.InputActionRotateCw},
+		{name: "encoder 2 ccw (previous track)", usage: [2]byte{0xB6, 0x00}, id: "encoder_1", action: protocol.InputActionRotateCcw},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := newTestEncoderMapper(t, 0)
+
+			got, err := m.Map([]byte{0x03, tt.usage[0], tt.usage[1]})
+
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, tt.id, got[0].InputId)
+			assert.Equal(t, tt.action, got[0].Action)
+			assert.Equal(t, protocol.InputKindEncoder, got[0].Kind)
+		})
+	}
 }
 
 func TestEncoderMapper_Map_OnSixteenBitUsage_ShouldDecodeLittleEndian(t *testing.T) {

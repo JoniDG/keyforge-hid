@@ -13,6 +13,7 @@ import (
 
 	"github.com/JoniDG/keyforge-hid/internal/device"
 	"github.com/JoniDG/keyforge-hid/internal/events"
+	"github.com/JoniDG/keyforge-hid/internal/vendor"
 	"github.com/JoniDG/keyforge-protocol/go/protocol"
 )
 
@@ -20,6 +21,11 @@ import (
 // connected HID device matches the built-in registry (e.g. the keypad is
 // unplugged). Callers can branch on it with errors.Is.
 var ErrNoRecognizedDevice = errors.New("hid: no recognized device connected")
+
+// ErrNoVendorInterface is returned by Provision when the recognized
+// device has no vendor interface KeyForge can configure, or it was not
+// enumerated.
+var ErrNoVendorInterface = errors.New("hid: recognized device has no vendor interface")
 
 // Device identifies the recognized keypad a Source streams from. ID is
 // the protocol.DeviceID every InputEvent delivered by Stream carries, so
@@ -36,7 +42,14 @@ type Source struct {
 	identifier device.Identifier
 	opener     device.Opener
 	setSeize   func(enabled bool) error
+	openVendor func(path string, limits vendor.Limits) (slotApplier, error)
 	seize      bool
+}
+
+// slotApplier is the part of *vendor.Client that Provision needs.
+type slotApplier interface {
+	ApplySlots(want []vendor.Slot) (int, error)
+	Close() error
 }
 
 // Option customizes a Source built by New.
@@ -63,6 +76,9 @@ func New(opts ...Option) *Source {
 		identifier: device.NewIdentifier(device.DefaultRegistry()),
 		opener:     device.NewOpener(),
 		setSeize:   device.SetSeize,
+		openVendor: func(path string, limits vendor.Limits) (slotApplier, error) {
+			return vendor.Open(path, limits)
+		},
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -91,6 +107,9 @@ func (s *Source) Discover() (Device, error) {
 // The returned Device.Id matches the one Discover reports and every
 // InputEvent Stream carries; Inputs is the device's curated logical input
 // catalog. VendorId/ProductId are lowercase 4-digit hex with no 0x prefix.
+//
+// Inputs describes the keypad after Provision: until it runs, the keypad
+// emits its factory codes, which are not in the catalog.
 func (s *Source) DiscoverDevice() (protocol.Device, error) {
 	r, err := s.resolve(context.Background())
 	if err != nil {
@@ -121,6 +140,41 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	}
 	if err != nil {
 		return fmt.Errorf("hid.Stream: %w", err)
+	}
+	return nil
+}
+
+// Provision writes the KeyForge input layout to the recognized keypad
+// so every key and encoder emits a distinct code, matching the input
+// catalog DiscoverDevice reports. The layout persists on the device and
+// only slots that differ are written, so calling Provision on an
+// already provisioned keypad changes nothing. It returns
+// ErrNoRecognizedDevice when no recognized device is connected and
+// ErrNoVendorInterface when the device cannot be configured. On any
+// other error the keypad may be partially provisioned; calling Provision
+// again converges.
+//
+// Provision opens the vendor interface, which is separate from the ones
+// Stream reads. On the reference keypad under macOS it needs no elevated
+// privileges and works while Stream is running; other platforms are not
+// verified yet.
+func (s *Source) Provision() error {
+	r, err := s.resolve(context.Background())
+	if err != nil {
+		return err
+	}
+	iface, ok := r.target.VendorInfo()
+	if !ok {
+		return ErrNoVendorInterface
+	}
+	spec := r.target.Known.Vendor
+	client, err := s.openVendor(iface.Path, vendor.Limits{Slots: spec.Slots, LEDs: spec.LEDs})
+	if err != nil {
+		return fmt.Errorf("hid.Provision: %w", err)
+	}
+	_, applyErr := client.ApplySlots(spec.Layout)
+	if err := errors.Join(applyErr, client.Close()); err != nil {
+		return fmt.Errorf("hid.Provision: %w", err)
 	}
 	return nil
 }
