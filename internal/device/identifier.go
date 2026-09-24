@@ -53,6 +53,21 @@ func (d IdentifiedDevice) Inputs() []MatchedInput {
 	return out
 }
 
+// VendorInfo returns the enumerated interface matching the usage
+// declared in Known.Vendor. The boolean is false when the device
+// declares no vendor interface or it was not enumerated.
+func (d IdentifiedDevice) VendorInfo() (Info, bool) {
+	if d.Known.Vendor.UsagePage == 0 {
+		return Info{}, false
+	}
+	for _, info := range d.Interfaces {
+		if info.UsagePage == d.Known.Vendor.UsagePage && info.Usage == d.Known.Vendor.Usage {
+			return info, true
+		}
+	}
+	return Info{}, false
+}
+
 // Identifier groups enumerated Info entries by (VendorID, ProductID)
 // and tags each group with registry metadata when available.
 type Identifier interface {

@@ -8,11 +8,13 @@ Capa de hardware: enumera dispositivos HID conectados, los identifica por VID/PI
 - Lectura de input reports de un dispositivo target.
 - Emisión de `InputEvent` (estructura del schema en `keyforge-protocol`).
 - Filtrado / "secuestro" del dispositivo para que el SO no reciba esos eventos en paralelo.
+- Driver de la interface vendor del keypad (`internal/vendor/`): leer/escribir qué código emite cada input físico, efecto de luz y color por tecla.
 
 **Fuera de scope:**
 - No conoce bindings, perfiles ni acciones (eso es `keyforge-core`).
 - No habla WebSocket (eso es responsabilidad del daemon en `keyforge-core`).
-- No sabe nada de RGB ni output reports (eso vendrá en una fase posterior, posiblemente como subpaquete).
+- Qué acción dispara cada código que emite un input (eso es `keyforge-core`).
+- API genérica de RGB ("color del input X"): la define core (7.b). Acá solo vive el driver de bajo nivel del keypad.
 
 ## Stack
 - Go 1.24
@@ -28,6 +30,7 @@ cmd/probe/main.go      → binario chiquito para probar detección y eventos en 
 internal/
   device/              → enumeración, identificación (VID/PID), apertura
   events/              → mapping de raw input reports a InputEvent
+  vendor/              → driver de la interface vendor (FF00) del keypad: leer/escribir slots de input, efecto y color RGB
 ```
 
 ## API pública
@@ -49,6 +52,15 @@ make cover    # reporte HTML de coverage
 make lint     # golangci-lint
 make probe    # corre cmd/probe (detecta y prints eventos)
 ```
+
+`probe` también habla con la interface vendor (sin `sudo` en macOS): `-vendor-slots` lee los slots de input de la capa 0, `-vendor-effect <off|static|breath|trigger|spectrum|user>` cambia el efecto de luz, y `-vendor-color LED:RRGGBB` prende una tecla (pasa el efecto a `user` primero). Los cambios persisten en el keypad; `-vendor-effect spectrum` vuelve al arcoíris de fábrica.
+
+### Driver vendor (`internal/vendor/`)
+- Protocolo documentado en `docs/hid-device-keyforge-keypad.md` §4.3.
+- **Regla dura:** el paquete solo arma los 4 comandos verificados (leer/escribir slot, efecto, color). **No** implementar el factory reset (`06 0F FF`) ni la entrada al bootloader (`5A A0`), ni exportar un "send raw". Un test lo verifica.
+- Escribir slots es persistente en el device: cualquier cambio de mapeo tiene que poder revertirse escribiendo los valores de fábrica slot por slot.
+- El cliente solo acepta índices dentro de los rangos verificados (`KnownDevice.Vendor.Slots`/`LEDs`) y solo trabaja sobre la capa 0 (las demás capas no están probadas). El firmware hace ack de cualquier índice, así que el límite lo pone el driver.
+- Un ack solo cuenta si además repite el payload enviado, para que un ack tardío de un comando anterior no se tome como confirmación.
 
 ## Reglas duras
 

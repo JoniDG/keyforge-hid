@@ -171,10 +171,11 @@ across reports.
 ### 4.3 Vendor-specific (interface 2, `FF00:0002`)
 
 Command/response channel used by the vendor configurator to remap
-inputs and drive the RGB. KeyForge does not open it at runtime yet;
-everything below was verified by hand against the reference keypad
-with a throwaway hidapi probe, and every change was reverted
-afterwards.
+inputs and drive the RGB. Everything below was verified by hand
+against the reference keypad, and every change was reverted
+afterwards. `internal/vendor` implements the verified commands, and
+`cmd/probe` exposes them for development (§6); the runtime event
+pipeline does not open this interface.
 
 **Sources.** The command builders were read from the vendor's WebHID
 configurator (<https://www.huali-tech.com>, a Next.js bundle; the
@@ -204,6 +205,9 @@ c0
   with `0xAA`. Writes echo the payload: `AA <cmd> 01 <rest of payload>`.
   The ack does **not** validate ranges (writes to nonexistent LED
   indices are acked too), so it only proves the packet was received.
+  The echo is what ties an ack to its command: `internal/vendor` only
+  accepts a reply whose echo matches the packet it sent (slot reads
+  echo just the offset in bytes 3–4).
 - No checksum. Unused bytes are zero-padded to 64.
 
 #### Commands (verified on hardware)
@@ -228,7 +232,10 @@ c0
   single, `04` spectrum (factory default, rainbow), `05` user light
   (per-key colors from the 0x14 command). `speed` observed 1–4.
   `mode` `02` multicolor, `03` mono. `H`/`S`/`V` are 0–255.
-- Per-key colors only render while the effect style is `05`.
+- Per-key colors only render while the effect style is `05`. They are
+  stored on the device independently of the effect: switching to
+  another style and back to `05` shows the last colors written, and
+  each 0x14 command only changes its own LED.
 
 The configurator also issues a bulk slot write,
 `06 09 3B <off_lo> <off_hi> 00 <layer> 00` + 56 data bytes. It was not
@@ -361,6 +368,17 @@ sudo ./bin/probe -stream -events
 # observable result is currently identical (see §5.1).
 sudo ./bin/probe -stream -events -shared
 ```
+
+### Vendor interface
+
+```sh
+# No sudo needed on macOS: this interface is not a keyboard.
+./bin/probe -vendor-slots               # dump the input slots (layer 0)
+./bin/probe -vendor-color 0:00ff00      # key 1 green (switches to user light)
+./bin/probe -vendor-effect spectrum     # back to the factory rainbow
+```
+
+Lighting and slot changes persist on the device.
 
 ### Debugging a specific interface
 

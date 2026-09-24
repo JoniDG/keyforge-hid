@@ -11,6 +11,11 @@
 // interface — hex dump by default, JSON events with -events. Useful
 // for debugging unrecognized layouts.
 //
+// Vendor mode (-vendor-slots, -vendor-effect, -vendor-color) talks to
+// the recognized device's vendor-specific interface instead: it reads
+// the input slots or changes the lighting. It does not need sudo on
+// macOS.
+//
 // Probe asks the platform to seize HID devices by default so the OS
 // stops receiving their reports in parallel; pass -shared to keep
 // the legacy behavior (e.g. to verify that a keypad's keystrokes
@@ -38,6 +43,7 @@ import (
 
 	"github.com/JoniDG/keyforge-hid/internal/device"
 	"github.com/JoniDG/keyforge-hid/internal/events"
+	"github.com/JoniDG/keyforge-hid/internal/vendor"
 	"github.com/JoniDG/keyforge-protocol/go/protocol"
 )
 
@@ -55,6 +61,9 @@ func run(args []string) error {
 	usageSelector := fs.String("usage", "", "with -stream, target the interface whose UsagePage:Usage equals AAAA:BBBB (hex, no 0x). Defaults to the primary keyboard interface.")
 	pathSelector := fs.String("path", "", "with -stream, target the interface whose platform path equals this exact value. Use when two interfaces share a usage. Mutually exclusive with -usage.")
 	shared := fs.Bool("shared", false, "with -stream, do NOT seize HID devices; let the OS receive reports in parallel. Default is to seize on supported platforms.")
+	vendorSlots := fs.Bool("vendor-slots", false, "read the recognized device's input slots (layer 0) over its vendor interface")
+	vendorEffect := fs.String("vendor-effect", "", "set the recognized device's lighting effect: off|static|breath|trigger|spectrum|user")
+	vendorColor := fs.String("vendor-color", "", "set one key LED as LED:RRGGBB (switches the effect to user light first)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -73,6 +82,29 @@ func run(args []string) error {
 	if *shared && !*stream {
 		return errors.New("probe: -shared requires -stream")
 	}
+	vendorMode := *vendorSlots || *vendorEffect != "" || *vendorColor != ""
+	if vendorMode && *stream {
+		return errors.New("probe: -vendor-* flags and -stream are mutually exclusive")
+	}
+	if *vendorEffect != "" && *vendorColor != "" {
+		return errors.New("probe: -vendor-effect and -vendor-color are mutually exclusive (-vendor-color switches the effect to user light)")
+	}
+	var lighting vendorLighting
+	if *vendorEffect != "" {
+		style, ok := effectStyles[*vendorEffect]
+		if !ok {
+			return fmt.Errorf("probe: unknown effect %q", *vendorEffect)
+		}
+		lighting.effect = &vendor.Effect{Style: style, Speed: 2, Color: vendor.HSV{S: 0xFF, V: 0xFF}}
+	}
+	if *vendorColor != "" {
+		led, rgb, err := parseLEDColor(*vendorColor)
+		if err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
+		lighting.effect = &vendor.Effect{Style: vendor.StyleUserLight, Speed: 2}
+		lighting.led, lighting.color = &led, &rgb
+	}
 
 	infos, err := device.NewEnumerator().List(context.Background())
 	if err != nil {
@@ -81,6 +113,9 @@ func run(args []string) error {
 
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
+	if vendorMode {
+		return runVendor(identified, *vendorSlots, lighting)
+	}
 	if *stream {
 		seizeStatus := resolveSeize(!*shared, os.Stderr)
 		return streamFirstRecognized(identified, *emitEvents, *usageSelector, *pathSelector, seizeStatus)
@@ -221,6 +256,79 @@ func streamAllInputs(target device.IdentifiedDevice, seize seizeStatus) error {
 		return fmt.Errorf("probe: %w", err)
 	}
 	return nil
+}
+
+var effectStyles = map[string]vendor.Style{
+	"off":      vendor.StyleOff,
+	"static":   vendor.StyleStatic,
+	"breath":   vendor.StyleBreath,
+	"trigger":  vendor.StyleTrigger,
+	"spectrum": vendor.StyleSpectrum,
+	"user":     vendor.StyleUserLight,
+}
+
+// vendorLighting is the lighting change requested on the command line:
+// an effect, optionally with one LED color.
+type vendorLighting struct {
+	effect *vendor.Effect
+	led    *int
+	color  *vendor.RGB
+}
+
+func runVendor(identified []device.IdentifiedDevice, readSlots bool, lighting vendorLighting) error {
+	target, ok := firstRecognized(identified)
+	if !ok {
+		return errors.New("probe: no recognized device connected")
+	}
+	iface, ok := target.VendorInfo()
+	if !ok {
+		return fmt.Errorf("probe: %s exposes no vendor interface", target.Known.Name)
+	}
+	client, err := vendor.Open(iface.Path, vendor.Limits{Slots: target.Known.Vendor.Slots, LEDs: target.Known.Vendor.LEDs})
+	if err != nil {
+		return fmt.Errorf("probe: %w", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	// Colors are stored apart from the effect, so the color goes first:
+	// a rejected LED then leaves the current effect untouched.
+	if lighting.led != nil {
+		if err := client.SetKeyColor(*lighting.led, *lighting.color); err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
+		c := lighting.color
+		fmt.Printf("led %d set to %02x%02x%02x\n", *lighting.led, c.R, c.G, c.B)
+	}
+	if lighting.effect != nil {
+		if err := client.SetEffect(*lighting.effect); err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
+		fmt.Printf("effect set to style 0x%02x\n", byte(lighting.effect.Style))
+	}
+	if readSlots {
+		slots, err := client.ReadSlots()
+		if err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
+		fmt.Printf("%s input slots (layer 0):\n", target.Known.Name)
+		for i, slot := range slots {
+			fmt.Printf("  %2d  %s\n", i, slot)
+		}
+	}
+	return nil
+}
+
+func parseLEDColor(s string) (int, vendor.RGB, error) {
+	ledPart, hexPart, ok := strings.Cut(s, ":")
+	led, err := strconv.Atoi(ledPart)
+	if !ok || err != nil {
+		return 0, vendor.RGB{}, fmt.Errorf("invalid LED color %q (want LED:RRGGBB)", s)
+	}
+	b, err := hex.DecodeString(hexPart)
+	if err != nil || len(b) != 3 {
+		return 0, vendor.RGB{}, fmt.Errorf("invalid color %q (want RRGGBB hex)", hexPart)
+	}
+	return led, vendor.RGB{R: b[0], G: b[1], B: b[2]}, nil
 }
 
 // selectInterface picks the interface of target to stream from. With

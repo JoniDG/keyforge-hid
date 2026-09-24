@@ -44,6 +44,22 @@ type KnownDevice struct {
 	// reflects what a user can meaningfully bind, not every interface.
 	// Each entry's Id matches the input_id the event mappers emit.
 	Controls []protocol.Input
+	// Vendor locates the device's configuration channel. The zero value
+	// means the device has none KeyForge can drive.
+	Vendor VendorInterface
+}
+
+// VendorInterface declares a device's vendor-specific configuration
+// interface and the index ranges verified on hardware (see
+// docs/hid-device-keyforge-keypad.md §4.3 for the slot and LED maps).
+type VendorInterface struct {
+	UsagePage uint16
+	Usage     uint16
+	// Slots is the total number of input slots wired to the device's
+	// physical inputs.
+	Slots int
+	// LEDs is the number of keys with an addressable LED.
+	LEDs int
 }
 
 // control builds a logical input catalog entry with a non-empty label.
@@ -82,6 +98,10 @@ var SideKeyboardKeypad = KnownDevice{
 		control("key_0x04", protocol.InputKindKey, "Key"),
 		control("encoder_0", protocol.InputKindEncoder, "Encoder"),
 	},
+	// Slots 0–21 back the ten keys and the two encoders' click/CW/CCW;
+	// the firmware answers for slots past 21 but nothing is wired to
+	// them. Only the ten keys have LEDs.
+	Vendor: VendorInterface{UsagePage: 0xFF00, Usage: 0x0002, Slots: 22, LEDs: 10},
 }
 
 // Registry is an immutable lookup of devices keyed by (VendorID, ProductID).
