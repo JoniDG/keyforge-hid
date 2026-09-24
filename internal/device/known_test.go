@@ -3,6 +3,7 @@ package device
 import (
 	"testing"
 
+	"github.com/JoniDG/keyforge-hid/internal/vendor"
 	"github.com/JoniDG/keyforge-protocol/go/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,30 +77,76 @@ func TestSideKeyboardKeypad_DeclaresKeyboardAndEncoderInputs(t *testing.T) {
 
 func TestSideKeyboardKeypad_DeclaresVendorInterface(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, VendorInterface{UsagePage: 0xFF00, Usage: 0x0002, Slots: 22, LEDs: 10}, SideKeyboardKeypad.Vendor)
+	v := SideKeyboardKeypad.Vendor
+	assert.Equal(t, uint16(0xFF00), v.UsagePage)
+	assert.Equal(t, uint16(0x0002), v.Usage)
+	assert.Equal(t, 22, v.Slots)
+	assert.Equal(t, 10, v.LEDs)
+	assert.Len(t, v.Layout, v.Slots)
+	assert.Len(t, v.Factory, v.Slots)
+}
+
+func TestSideKeyboardKeypad_Layout_ShouldGiveEveryInputADistinctCode(t *testing.T) {
+	t.Parallel()
+	layout := SideKeyboardKeypad.Vendor.Layout
+
+	for i := range 10 {
+		assert.Equal(t, vendor.KeyboardSlot(0x00, byte(0x68+i)), layout[i], "key slot %d should be F%d", i, 13+i)
+	}
+	for i := 10; i < 16; i++ {
+		assert.Equal(t, vendor.DisabledSlot(), layout[i], "slot %d", i)
+	}
+	assert.Equal(t, []vendor.Slot{
+		vendor.ConsumerSlot(0x00E2), vendor.ConsumerSlot(0x00E9), vendor.ConsumerSlot(0x00EA), // encoder 1
+		vendor.ConsumerSlot(0x00CD), vendor.ConsumerSlot(0x00B5), vendor.ConsumerSlot(0x00B6), // encoder 2
+	}, layout[16:22])
+}
+
+func TestSideKeyboardKeypad_Factory_ShouldMatchOutOfTheBoxSlots(t *testing.T) {
+	t.Parallel()
+	factory := SideKeyboardKeypad.Vendor.Factory
+
+	for i := range 10 {
+		assert.Equal(t, vendor.KeyboardSlot(0x01, 0x04), factory[i], "key slot %d should be Ctrl+A", i)
+	}
+	for i := 10; i < 16; i++ {
+		assert.Equal(t, vendor.DisabledSlot(), factory[i], "slot %d", i)
+	}
+	for _, base := range []int{16, 19} {
+		assert.Equal(t, []vendor.Slot{
+			vendor.ConsumerSlot(0x00E2), vendor.ConsumerSlot(0x00E9), vendor.ConsumerSlot(0x00EA),
+		}, factory[base:base+3], "encoder at slot %d", base)
+	}
 }
 
 func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
 	t.Parallel()
-	require.Len(t, SideKeyboardKeypad.Controls, 3)
-
-	mod := SideKeyboardKeypad.Controls[0]
-	assert.Equal(t, "mod_lctrl", mod.Id)
-	assert.Equal(t, protocol.InputKindKey, mod.Kind)
-	require.NotNil(t, mod.Label)
-	assert.Equal(t, "Left Ctrl", *mod.Label)
-
-	key := SideKeyboardKeypad.Controls[1]
-	assert.Equal(t, "key_0x04", key.Id)
-	assert.Equal(t, protocol.InputKindKey, key.Kind)
-	require.NotNil(t, key.Label)
-	assert.Equal(t, "Key", *key.Label)
-
-	enc := SideKeyboardKeypad.Controls[2]
-	assert.Equal(t, "encoder_0", enc.Id)
-	assert.Equal(t, protocol.InputKindEncoder, enc.Kind)
-	require.NotNil(t, enc.Label)
-	assert.Equal(t, "Encoder", *enc.Label)
+	want := []struct {
+		id    string
+		kind  protocol.InputKind
+		label string
+	}{
+		{"key_0x68", protocol.InputKindKey, "Key 1"},
+		{"key_0x69", protocol.InputKindKey, "Key 2"},
+		{"key_0x6a", protocol.InputKindKey, "Key 3"},
+		{"key_0x6b", protocol.InputKindKey, "Key 4"},
+		{"key_0x6c", protocol.InputKindKey, "Key 5"},
+		{"key_0x6d", protocol.InputKindKey, "Key 6"},
+		{"key_0x6e", protocol.InputKindKey, "Key 7"},
+		{"key_0x6f", protocol.InputKindKey, "Key 8"},
+		{"key_0x70", protocol.InputKindKey, "Key 9"},
+		{"key_0x71", protocol.InputKindKey, "Key 10"},
+		{"encoder_0", protocol.InputKindEncoder, "Encoder 1"},
+		{"encoder_1", protocol.InputKindEncoder, "Encoder 2"},
+	}
+	require.Len(t, SideKeyboardKeypad.Controls, len(want))
+	for i, w := range want {
+		got := SideKeyboardKeypad.Controls[i]
+		assert.Equal(t, w.id, got.Id)
+		assert.Equal(t, w.kind, got.Kind)
+		require.NotNil(t, got.Label)
+		assert.Equal(t, w.label, *got.Label)
+	}
 }
 
 func TestControl_ShouldSetLabelPointer(t *testing.T) {

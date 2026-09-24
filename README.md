@@ -72,7 +72,18 @@ make build && ./bin/probe -stream -events | jq
 {"action":"release","device_id":"VID_6D82_PID_DC83","input_id":"mod_lctrl","kind":"key","timestamp_ms":1746662400245}
 ```
 
-`input_id` is derived from the HID byte: `mod_<name>` for the modifier byte (left/right ctrl/shift/alt/meta), `key_0x<hex>` for keycodes from the boot keyboard report. Encoder events come from a different HID interface and are mapped in the next phase.
+`input_id` is derived from the HID byte: `mod_<name>` for the modifier byte (left/right ctrl/shift/alt/meta), `key_0x<hex>` for keycodes from the boot keyboard report. Encoder events come from the Consumer Control interface as `encoder_0` / `encoder_1` with `click`, `rotate_cw` or `rotate_ccw`.
+
+#### Telling the keys and encoders apart
+
+Out of the box the reference keypad sends `Ctrl+A` from every key and the same volume/mute events from both encoders. Provision it once so each input emits its own code (F13–F22 for the keys, distinct media usages for the second encoder). The change persists on the device and needs no `sudo`:
+
+```bash
+./bin/probe -provision -vendor-slots   # write the KeyForge layout and show it
+./bin/probe -factory-layout            # undo it
+```
+
+See [the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout) for the full layout.
 
 #### OS permissions
 
@@ -92,7 +103,11 @@ The root `hid` package is the importable entry point. `Discover` reports the
 recognized keypad (and the `DeviceID` its events will carry) before streaming;
 `DiscoverDevice` returns the same device as a fully populated
 `protocol.Device` (VID/PID, path, and the logical input catalog) so a consumer
-can persist and describe it without opening it; `Stream` blocks delivering
+can persist and describe it without opening it; `Provision` writes the KeyForge
+input layout to the keypad so every key and encoder emits a distinct code (the
+catalog describes the provisioned keypad; see
+[the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout));
+`Stream` blocks delivering
 decoded `protocol.InputEvent` values until the context is cancelled, the sink
 returns an error, or a reader fails.
 
@@ -146,6 +161,7 @@ Seizing the device (so the OS stops receiving its reports) is opt-in via
 | `cmd/probe/main.go` | CLI for manual device discovery and event inspection |
 | `internal/device/` | Enumeration, identification, open/close lifecycle |
 | `internal/events/` | Mapping from raw input reports to typed events |
+| `internal/vendor/` | Driver for the keypad's vendor interface: input slots and RGB |
 
 ## Cross-platform support
 

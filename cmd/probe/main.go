@@ -11,10 +11,10 @@
 // interface — hex dump by default, JSON events with -events. Useful
 // for debugging unrecognized layouts.
 //
-// Vendor mode (-vendor-slots, -vendor-effect, -vendor-color) talks to
-// the recognized device's vendor-specific interface instead: it reads
-// the input slots or changes the lighting. It does not need sudo on
-// macOS.
+// Vendor mode (-vendor-slots, -vendor-effect, -vendor-color,
+// -provision, -factory-layout) talks to the recognized device's
+// vendor-specific interface instead: it reads or rewrites the input
+// slots, or changes the lighting. It does not need sudo on macOS.
 //
 // Probe asks the platform to seize HID devices by default so the OS
 // stops receiving their reports in parallel; pass -shared to keep
@@ -64,6 +64,8 @@ func run(args []string) error {
 	vendorSlots := fs.Bool("vendor-slots", false, "read the recognized device's input slots (layer 0) over its vendor interface")
 	vendorEffect := fs.String("vendor-effect", "", "set the recognized device's lighting effect: off|static|breath|trigger|spectrum|user")
 	vendorColor := fs.String("vendor-color", "", "set one key LED as LED:RRGGBB (switches the effect to user light first)")
+	provision := fs.Bool("provision", false, "write the KeyForge input layout so every key and encoder emits a distinct code")
+	factoryLayout := fs.Bool("factory-layout", false, "write the factory input layout back (undoes -provision)")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -82,12 +84,15 @@ func run(args []string) error {
 	if *shared && !*stream {
 		return errors.New("probe: -shared requires -stream")
 	}
-	vendorMode := *vendorSlots || *vendorEffect != "" || *vendorColor != ""
+	vendorMode := *vendorSlots || *vendorEffect != "" || *vendorColor != "" || *provision || *factoryLayout
 	if vendorMode && *stream {
 		return errors.New("probe: -vendor-* flags and -stream are mutually exclusive")
 	}
 	if *vendorEffect != "" && *vendorColor != "" {
 		return errors.New("probe: -vendor-effect and -vendor-color are mutually exclusive (-vendor-color switches the effect to user light)")
+	}
+	if *provision && *factoryLayout {
+		return errors.New("probe: -provision and -factory-layout are mutually exclusive")
 	}
 	var lighting vendorLighting
 	if *vendorEffect != "" {
@@ -114,7 +119,7 @@ func run(args []string) error {
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
 	if vendorMode {
-		return runVendor(identified, *vendorSlots, lighting)
+		return runVendor(identified, vendorRequest{readSlots: *vendorSlots, provision: *provision, factoryLayout: *factoryLayout, lighting: lighting})
 	}
 	if *stream {
 		seizeStatus := resolveSeize(!*shared, os.Stderr)
@@ -275,7 +280,17 @@ type vendorLighting struct {
 	color  *vendor.RGB
 }
 
-func runVendor(identified []device.IdentifiedDevice, readSlots bool, lighting vendorLighting) error {
+// vendorRequest is everything vendor mode was asked to do, in the order
+// runVendor does it: rewrite the layout, change the lighting, then dump
+// the slots (so -vendor-slots shows the result of the other flags).
+type vendorRequest struct {
+	readSlots     bool
+	provision     bool
+	factoryLayout bool
+	lighting      vendorLighting
+}
+
+func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 	target, ok := firstRecognized(identified)
 	if !ok {
 		return errors.New("probe: no recognized device connected")
@@ -290,6 +305,18 @@ func runVendor(identified []device.IdentifiedDevice, readSlots bool, lighting ve
 	}
 	defer func() { _ = client.Close() }()
 
+	if req.provision || req.factoryLayout {
+		name, layout := "KeyForge", target.Known.Vendor.Layout
+		if req.factoryLayout {
+			name, layout = "factory", target.Known.Vendor.Factory
+		}
+		written, err := client.ApplySlots(layout)
+		if err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
+		fmt.Printf("%s layout applied (%d slot(s) written)\n", name, written)
+	}
+	lighting := req.lighting
 	// Colors are stored apart from the effect, so the color goes first:
 	// a rejected LED then leaves the current effect untouched.
 	if lighting.led != nil {
@@ -305,7 +332,7 @@ func runVendor(identified []device.IdentifiedDevice, readSlots bool, lighting ve
 		}
 		fmt.Printf("effect set to style 0x%02x\n", byte(lighting.effect.Style))
 	}
-	if readSlots {
+	if req.readSlots {
 		slots, err := client.ReadSlots()
 		if err != nil {
 			return fmt.Errorf("probe: %w", err)

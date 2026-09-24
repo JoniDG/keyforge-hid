@@ -139,6 +139,31 @@ func (c *Client) WriteSlot(index int, s Slot) error {
 	return nil
 }
 
+// ApplySlots makes the device's input slots match want (one entry per
+// slot, index = slot) and returns how many it had to write. Slots that
+// already match are left alone, so applying the same layout twice
+// writes nothing the second time.
+func (c *Client) ApplySlots(want []Slot) (int, error) {
+	if len(want) != c.limits.Slots {
+		return 0, fmt.Errorf("vendor.ApplySlots (got %d slots, want %d): %w", len(want), c.limits.Slots, ErrInvalidArgument)
+	}
+	current, err := c.ReadSlots()
+	if err != nil {
+		return 0, fmt.Errorf("vendor.ApplySlots: %w", err)
+	}
+	written := 0
+	for i, slot := range want {
+		if current[i] == slot {
+			continue
+		}
+		if err := c.WriteSlot(i, slot); err != nil {
+			return written, fmt.Errorf("vendor.ApplySlots (slot %d): %w", i, err)
+		}
+		written++
+	}
+	return written, nil
+}
+
 // SetEffect replaces the keypad-wide lighting effect.
 func (c *Client) SetEffect(e Effect) error {
 	mode := byte(0x02)

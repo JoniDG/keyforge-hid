@@ -368,3 +368,80 @@ func TestClient_ExportedCommands_ShouldOnlySendVerifiedCommands(t *testing.T) {
 		assert.True(t, allowed[pkt[1]], "unexpected command 0x%02x", pkt[1])
 	}
 }
+
+func TestClient_ApplySlots_ShouldWriteOnlyTheSlotsThatDiffer(t *testing.T) {
+	t.Parallel()
+	current := factorySlotData()
+	f := &fakeTransport{respond: deviceAck(current)}
+	c := newTestClient(f)
+	want, err := c.ReadSlots()
+	require.NoError(t, err)
+	want[0] = KeyboardSlot(0x00, 0x68)
+	want[19] = ConsumerSlot(0x00CD)
+	f.writes = nil
+
+	written, err := c.ApplySlots(want)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, written)
+	require.Len(t, f.writes, 4, "two chunked reads, then one write per changed slot")
+	assert.Equal(t, []byte{0x06, 0x10, 0x07, 0x00, 0x00}, packet(t, f.writes[2])[:5])
+	assert.Equal(t, []byte{0x06, 0x10, 0x07, 0x4C, 0x00}, packet(t, f.writes[3])[:5])
+}
+
+func TestClient_ApplySlots_WhenAlreadyApplied_ShouldWriteNothing(t *testing.T) {
+	t.Parallel()
+	f := &fakeTransport{respond: deviceAck(factorySlotData())}
+	c := newTestClient(f)
+	want, err := c.ReadSlots()
+	require.NoError(t, err)
+
+	written, err := c.ApplySlots(want)
+
+	require.NoError(t, err)
+	assert.Zero(t, written)
+}
+
+func TestClient_ApplySlots_WhenLengthDoesNotMatchLimits_ShouldReturnErrInvalidArgument(t *testing.T) {
+	t.Parallel()
+	f := &fakeTransport{}
+	c := newTestClient(f)
+
+	written, err := c.ApplySlots(make([]Slot, 3))
+
+	assert.Zero(t, written)
+	assert.ErrorIs(t, err, ErrInvalidArgument)
+	assert.Empty(t, f.writes)
+}
+
+func TestClient_ApplySlots_WhenReadFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	c := newTestClient(&fakeTransport{})
+
+	_, err := c.ApplySlots(make([]Slot, testLimits.Slots))
+
+	assert.ErrorIs(t, err, ErrNoAck)
+}
+
+func TestClient_ApplySlots_WhenAWriteFails_ShouldReportSlotsWrittenSoFar(t *testing.T) {
+	t.Parallel()
+	ack := deviceAck(factorySlotData())
+	f := &fakeTransport{}
+	f.respond = func(out []byte) [][]byte {
+		// Acknowledge the reads and the first write only.
+		if out[2] == cmdWriteSlot && out[4] != 0x00 {
+			return nil
+		}
+		return ack(out)
+	}
+	c := newTestClient(f)
+	want := make([]Slot, testLimits.Slots)
+	for i := range want {
+		want[i] = KeyboardSlot(0x00, 0x68)
+	}
+
+	written, err := c.ApplySlots(want)
+
+	assert.Equal(t, 1, written)
+	assert.ErrorIs(t, err, ErrNoAck)
+}

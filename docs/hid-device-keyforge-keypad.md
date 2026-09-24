@@ -68,8 +68,47 @@ reconfiguration):
 
 The two physical encoders are **indistinguishable** through the
 firmware's factory mapping: both emit identical Consumer Control
-events. Differentiation requires reprogramming the device's input
-slots via the vendor protocol (§4.3).
+events, and the ten keys emit the same chord.
+
+### 2.1 KeyForge layout
+
+`Source.Provision()` (or `probe -provision`) rewrites the device's
+input slots (§4.3) so every input emits a distinct code. The layout
+persists on the device; `probe -factory-layout` writes the factory
+values back slot by slot.
+
+**Canonical orientation.** Labels are numbered with the keypad
+horizontal and the encoders on the right. The numbering doesn't change
+if the keypad is rotated (a binding follows the physical input);
+rendering it in another orientation is a presentation concern for the
+GUI.
+
+```
+Key 1  Key 2  Key 3  Key 4  Key 5    Encoder 1
+Key 6  Key 7  Key 8  Key 9  Key 10   Encoder 2
+```
+
+| Physical input     | Slots    | Emits                                   | `input_id`              | Label       |
+| ------------------ | -------- | --------------------------------------- | ----------------------- | ----------- |
+| Keys 1–10          | 0–9      | F13–F22 (usages `0x68`–`0x71`), no mods | `key_0x68`…`key_0x71`   | Key 1…10    |
+| Encoder 1          | 16–18    | Mute / Volume Up / Volume Down (factory) | `encoder_0`            | Encoder 1   |
+| Encoder 2          | 19–21    | Play/Pause / Next Track / Prev Track     | `encoder_1`            | Encoder 2   |
+
+The encoders stay on Consumer Control, so they keep `kind: encoder` and
+the `click`/`rotate_cw`/`rotate_ccw` actions. Without KeyForge running
+they still act as volume and media controls. The input catalog that
+`DiscoverDevice` reports describes this layout, so the keypad must be
+provisioned for the catalog to match what it emits.
+
+**Side effects when nothing captures the keypad.** While KeyForge is
+not running, or runs without seizing the device, the OS receives the
+provisioned codes too. Some high function keys already have a system
+action: on Linux (xkeyboard-config defaults, GNOME/KDE) F20 toggles
+the microphone mute and F21/F22 toggle/enable the touchpad (keys 8–10);
+on macOS F14/F15 often change the display brightness (keys 2–3). The
+factory `Ctrl+A` has the same kind of problem (select all). Run the
+daemon with seize enabled once the keypad is provisioned so the OS
+stops receiving these codes.
 
 ---
 
@@ -87,7 +126,7 @@ their platform path (on macOS, a stable per-session `DevSrvsID:N`):
 | --------- | ----------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 0         | `DevSrvsID:4295184749`  | `0001:0006` (keyboard alt), `0001:0001/02/0c/80`, `000c:0001` (CC)   | Multi-TLC. KeyForge reads it for **encoder** Consumer Control.   |
 | 1         | `DevSrvsID:4295184751`  | `0001:0006` (boot keyboard)                                          | KeyForge reads it for the **10 physical keys** (boot protocol).  |
-| 2         | `DevSrvsID:4295184750`  | `0xFF00:0x0002` (vendor-specific)                                    | Vendor protocol — RGB + on-device input remapping (§4.3). Not opened by KeyForge at runtime yet. |
+| 2         | `DevSrvsID:4295184750`  | `0xFF00:0x0002` (vendor-specific)                                    | Vendor protocol — RGB + on-device input remapping (§4.3). Opened by `Source.Provision` and probe's vendor mode, never by `Stream`. |
 
 Several observations that matter when writing code that opens this
 device:
@@ -154,16 +193,18 @@ Usages observed on the reference keypad:
 | `E9 00`                 | `0x00E9` | Volume Increment           | `rotate_cw` on `encoder_0`            |
 | `EA 00`                 | `0x00EA` | Volume Decrement           | `rotate_ccw` on `encoder_0`           |
 | `E2 00`                 | `0x00E2` | Mute                       | `click` on `encoder_0`                |
+| `CD 00`                 | `0x00CD` | Play/Pause                 | `click` on `encoder_1`                |
+| `B5 00`                 | `0x00B5` | Scan Next Track            | `rotate_cw` on `encoder_1`            |
+| `B6 00`                 | `0x00B6` | Scan Previous Track        | `rotate_ccw` on `encoder_1`           |
 | `00 00`                 | `0x0000` | release                    | ignored                               |
 
 Every event arrives as a **press + release pair**; the release report
 (`03 00 00`) is dropped silently because rotation has no release
 semantic and the click is emitted on press.
 
-Both physical encoders share the same `input_id` (`encoder_0`) because
-the factory firmware emits indistinguishable reports. The vendor
-protocol can reprogram them to distinct codes (§4.3), but the decoder
-does not use that yet.
+The `CD`/`B5`/`B6` usages only appear once the keypad is provisioned
+(§2.1). Under the factory mapping both encoders emit the `E2`/`E9`/`EA`
+usages and collapse into `encoder_0`.
 
 Decoded by `internal/events.EncoderMapper`. The mapper is stateless
 across reports.
@@ -174,8 +215,8 @@ Command/response channel used by the vendor configurator to remap
 inputs and drive the RGB. Everything below was verified by hand
 against the reference keypad, and every change was reverted
 afterwards. `internal/vendor` implements the verified commands, and
-`cmd/probe` exposes them for development (§6); the runtime event
-pipeline does not open this interface.
+`cmd/probe` exposes them for development (§6). `Source.Provision`
+opens it to write the KeyForge layout (§2.1); `Stream` never does.
 
 **Sources.** The command builders were read from the vendor's WebHID
 configurator (<https://www.huali-tech.com>, a Next.js bundle; the
@@ -376,6 +417,8 @@ sudo ./bin/probe -stream -events -shared
 ./bin/probe -vendor-slots               # dump the input slots (layer 0)
 ./bin/probe -vendor-color 0:00ff00      # key 1 green (switches to user light)
 ./bin/probe -vendor-effect spectrum     # back to the factory rainbow
+./bin/probe -provision -vendor-slots    # write the KeyForge layout (§2.1) and show it
+./bin/probe -factory-layout             # undo it: every key back to Ctrl+A
 ```
 
 Lighting and slot changes persist on the device.
@@ -400,13 +443,15 @@ or layout.
 
 ## 7. Known limitations and open follow-ups
 
-- **Key and encoder differentiation.** Under the factory mapping the
-  ten keys all emit `Ctrl+A` and both encoders emit identical Consumer
-  Control events. The vendor protocol (§4.3) can give every slot a
-  distinct code, but KeyForge has no driver for it yet, and which
-  codes to assign is still an open design decision.
-- **RGB.** The protocol is documented in §4.3 but not implemented in
-  KeyForge.
+- **Provisioning is manual.** Keys and encoders are only distinct
+  after `Source.Provision()` runs; nothing calls it automatically yet.
+  Bindings made against the factory chord (`mod_lctrl` / `key_0x04`)
+  stop matching once the keypad is provisioned.
+- **OS side effects of F13–F22.** Without seize, some provisioned keys
+  also trigger system actions (see §2.1). Accepted trade-off; the
+  daemon should seize a provisioned keypad.
+- **RGB.** `internal/vendor` can set effects and per-key colors, but
+  the public API does not expose them yet.
 - **Key layers.** The firmware supports multiple key layers
   (`layer` byte in §4.3); only layer `0` has been exercised.
 - **`device_id` Serial stability.** `Info.Serial` is empty during

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/JoniDG/keyforge-hid/internal/device"
+	"github.com/JoniDG/keyforge-hid/internal/events"
+	"github.com/JoniDG/keyforge-hid/internal/vendor"
 	"github.com/JoniDG/keyforge-protocol/go/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,7 +134,11 @@ func TestNew_ShouldWireRealPipelineWithSeizeDisabledByDefault(t *testing.T) {
 	require.NotNil(t, s.identifier)
 	require.NotNil(t, s.opener)
 	require.NotNil(t, s.setSeize)
+	require.NotNil(t, s.openVendor)
 	assert.False(t, s.seize)
+
+	_, err := s.openVendor("keyforge-nonexistent-vendor-path", vendor.Limits{})
+	assert.ErrorIs(t, err, vendor.ErrOpen)
 }
 
 func TestWithSeize_ShouldSetSeizeFlag(t *testing.T) {
@@ -242,7 +248,7 @@ func TestDiscoverDevice_ShouldReturnInputsClientsCannotMutateRegistry(t *testing
 	require.NotEmpty(t, dev.Inputs)
 
 	dev.Inputs[0].Id = "mutated"
-	assert.Equal(t, "mod_lctrl", device.SideKeyboardKeypad.Controls[0].Id)
+	assert.Equal(t, "key_0x68", device.SideKeyboardKeypad.Controls[0].Id)
 }
 
 func TestDiscoverDevice_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {
@@ -410,4 +416,155 @@ func TestStream_WhenRecognizedDeviceHasNoDecodableInputs_ShouldReturnNilWithoutO
 
 	require.NoError(t, err)
 	assert.Empty(t, opener.openCalls())
+}
+
+func vendorInfo(path string) device.Info {
+	return device.Info{Path: path, VendorID: testVID, ProductID: testPID, UsagePage: 0xFF00, Usage: 0x0002}
+}
+
+// fakeApplier records what Provision asked the vendor client to do.
+type fakeApplier struct {
+	applied    []vendor.Slot
+	applyErr   error
+	closeErr   error
+	closeCalls int
+}
+
+func (f *fakeApplier) ApplySlots(want []vendor.Slot) (int, error) {
+	f.applied = want
+	return len(want), f.applyErr
+}
+
+func (f *fakeApplier) Close() error {
+	f.closeCalls++
+	return f.closeErr
+}
+
+// provisionSource builds a Source over the given enumeration whose vendor
+// seam hands out applier and records the path and limits it was opened
+// with.
+func provisionSource(infos []device.Info, applier *fakeApplier, openErr error) (*Source, *string, *vendor.Limits) {
+	s := newSource(fakeEnumerator{infos: infos}, &stubOpener{})
+	var gotPath string
+	var gotLimits vendor.Limits
+	s.openVendor = func(path string, limits vendor.Limits) (slotApplier, error) {
+		gotPath, gotLimits = path, limits
+		if openErr != nil {
+			return nil, openErr
+		}
+		return applier, nil
+	}
+	return s, &gotPath, &gotLimits
+}
+
+func TestProvision_WhenVendorInterfaceEnumerated_ShouldApplyKeyForgeLayout(t *testing.T) {
+	t.Parallel()
+	applier := &fakeApplier{}
+	s, path, limits := provisionSource([]device.Info{keyboardInfo("kb", ""), vendorInfo("vendor")}, applier, nil)
+
+	err := s.Provision()
+
+	require.NoError(t, err)
+	assert.Equal(t, "vendor", *path)
+	assert.Equal(t, vendor.Limits{Slots: 22, LEDs: 10}, *limits)
+	assert.Equal(t, device.SideKeyboardKeypad.Vendor.Layout, applier.applied)
+	assert.Equal(t, 1, applier.closeCalls)
+}
+
+func TestProvision_WhenVendorInterfaceNotEnumerated_ShouldReturnErrNoVendorInterface(t *testing.T) {
+	t.Parallel()
+	applier := &fakeApplier{}
+	s, path, _ := provisionSource([]device.Info{keyboardInfo("kb", "")}, applier, nil)
+
+	err := s.Provision()
+
+	assert.ErrorIs(t, err, ErrNoVendorInterface)
+	assert.Empty(t, *path, "must not open anything")
+}
+
+func TestProvision_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {
+	t.Parallel()
+	s, _, _ := provisionSource([]device.Info{{Path: "x", VendorID: 0x1111, ProductID: 0x2222}}, &fakeApplier{}, nil)
+
+	err := s.Provision()
+
+	assert.ErrorIs(t, err, ErrNoRecognizedDevice)
+}
+
+func TestProvision_WhenEnumerationFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("enumerate boom")
+	s := newSource(fakeEnumerator{err: boom}, &stubOpener{})
+
+	err := s.Provision()
+
+	assert.ErrorIs(t, err, boom)
+}
+
+func TestProvision_WhenOpenFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("open boom")
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, boom)
+
+	err := s.Provision()
+
+	assert.ErrorIs(t, err, boom)
+}
+
+func TestProvision_WhenApplyFails_ShouldWrapErrorAndStillClose(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("apply boom")
+	applier := &fakeApplier{applyErr: boom}
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, applier, nil)
+
+	err := s.Provision()
+
+	assert.ErrorIs(t, err, boom)
+	assert.Equal(t, 1, applier.closeCalls)
+}
+
+func TestProvision_WhenCloseFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("close boom")
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{closeErr: boom}, nil)
+
+	err := s.Provision()
+
+	assert.ErrorIs(t, err, boom)
+}
+
+// The layout Provision writes, the catalog DiscoverDevice reports and the
+// event mappers are three hand-written tables; this ties them together.
+// Every slot the layout wires is fed through the real mapper as the
+// report the keypad sends for it, and the input ids that come out must be
+// exactly the catalog.
+func TestSideKeyboardKeypad_WhenProvisioned_ShouldEmitExactlyTheCatalogInputs(t *testing.T) {
+	t.Parallel()
+	known := device.SideKeyboardKeypad
+
+	emitted := map[string]bool{}
+	for i, slot := range known.Vendor.Layout {
+		var evs []protocol.InputEvent
+		var err error
+		switch slot.Type {
+		case vendor.SlotDisabled:
+			continue
+		case vendor.SlotKeyboard:
+			report := []byte{slot.Codes[0], 0x00, slot.Codes[1], 0, 0, 0, 0, 0}
+			evs, err = events.NewKeyboardMapper(testDeviceID).Map(report)
+		case vendor.SlotConsumer:
+			evs, err = events.NewEncoderMapper(testDeviceID).Map([]byte{0x03, slot.Codes[0], slot.Codes[1]})
+		default:
+			t.Fatalf("slot %d: unexpected type %s", i, slot)
+		}
+		require.NoError(t, err, "slot %d", i)
+		require.Len(t, evs, 1, "slot %d (%s) must emit exactly one event", i, slot)
+		emitted[evs[0].InputId] = true
+	}
+
+	catalog := map[string]bool{}
+	for _, in := range known.Controls {
+		catalog[in.Id] = true
+	}
+	assert.Equal(t, catalog, emitted)
 }
