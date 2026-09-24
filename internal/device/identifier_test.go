@@ -238,3 +238,45 @@ func TestIdentifiedDevice_Inputs_WhenTwoKnownInputsShareUsage_ShouldEmitInfoOnce
 	require.Len(t, got, 1)
 	assert.Equal(t, RoleKeyboard, got[0].Role)
 }
+
+func TestIdentifiedDevice_VendorInfo_WhenEnumerated_ShouldReturnIt(t *testing.T) {
+	t.Parallel()
+	vendor := Info{Path: "vendor", UsagePage: 0xFF00, Usage: 0x0002, Interface: 2}
+	d := IdentifiedDevice{
+		Known: SideKeyboardKeypad,
+		Interfaces: []Info{
+			{Path: "kbd", UsagePage: 0x0001, Usage: 0x0006},
+			{Path: "other-vendor-usage", UsagePage: 0xFF00, Usage: 0x0001},
+			vendor,
+		},
+	}
+
+	got, ok := d.VendorInfo()
+
+	require.True(t, ok)
+	assert.Equal(t, vendor, got)
+}
+
+func TestIdentifiedDevice_VendorInfo_WhenNotEnumerated_ShouldReturnFalse(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{
+		Known:      SideKeyboardKeypad,
+		Interfaces: []Info{{Path: "kbd", UsagePage: 0x0001, Usage: 0x0006}},
+	}
+
+	got, ok := d.VendorInfo()
+
+	assert.False(t, ok)
+	assert.Equal(t, Info{}, got)
+}
+
+func TestIdentifiedDevice_VendorInfo_WhenDeviceDeclaresNone_ShouldReturnFalse(t *testing.T) {
+	t.Parallel()
+	d := IdentifiedDevice{
+		Interfaces: []Info{{Path: "vendor", UsagePage: 0xFF00, Usage: 0x0002}},
+	}
+
+	_, ok := d.VendorInfo()
+
+	assert.False(t, ok)
+}

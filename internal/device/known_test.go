@@ -74,6 +74,11 @@ func TestSideKeyboardKeypad_DeclaresKeyboardAndEncoderInputs(t *testing.T) {
 	assert.Equal(t, KnownInput{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001}, SideKeyboardKeypad.Inputs[1])
 }
 
+func TestSideKeyboardKeypad_DeclaresVendorInterface(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, VendorInterface{UsagePage: 0xFF00, Usage: 0x0002, Slots: 22, LEDs: 10}, SideKeyboardKeypad.Vendor)
+}
+
 func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
 	t.Parallel()
 	require.Len(t, SideKeyboardKeypad.Controls, 3)
