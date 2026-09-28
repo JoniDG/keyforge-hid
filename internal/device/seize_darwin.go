@@ -4,36 +4,31 @@ package device
 
 import "github.com/sstallion/go-hid"
 
-// setSeize toggles hidapi's process-wide open flag. With enabled=true,
-// every subsequent hid.OpenPath asks IOKit for
-// kIOHIDOptionsTypeSeizeDevice; with enabled=false, it uses
-// kIOHIDOptionsTypeNone.
+// setSeize accepts both modes on darwin; the Opener applies the one
+// requested right before each open (see applyOpenMode).
+func setSeize(bool) error { return nil }
+
+// applyOpenMode sets hidapi's process-wide open flag: seize maps to
+// kIOHIDOptionsTypeSeizeDevice, shared to kIOHIDOptionsTypeNone.
 //
-// Empirical caveat on macOS Sequoia (verified against the reference
-// keypad's boot keyboard and Consumer Control TLCs): IOHIDDeviceOpen
-// appears to claim the TLC's event routing regardless of which
-// options bit is passed. Both -shared and the default seize path
-// observed the same outcome — the OS HID services did not deliver
-// volume/mute/keyboard events to other consumers in either mode. The
-// effective gate against parallel OS delivery is opening the TLC at
-// all, not the seize option.
+// It must run after hid.Init and under hidapiMu: hid_init resets the
+// flag to seize whenever it has to create the HID manager ("Backward
+// compatibility" in hid_darwin.c), which happens on the first init
+// and again after every hid.Exit. Setting the flag earlier is undone
+// by the next implicit init inside hid.OpenPath, and on macOS 27 a
+// seize open of a keyboard TLC without root fails with 0xE00002C1
+// (privilege violation).
 //
-// We still call hid.SetOpenExclusive(true) on the seize path so the
-// intent is recorded in code and so future macOS releases that honor
-// the option distinctly do the right thing.
-//
-// hidapi auto-initialises its global to seize on darwin (see hid_init
-// in hid_darwin.c — "Backward compatibility"). Callers that want
-// shared mode MUST call this with false explicitly; merely not calling
-// it leaves the flag at the seize default.
-func setSeize(enabled bool) error {
-	hid.SetOpenExclusive(enabled)
-	return nil
+// The option is what decides OS routing: with a shared open the OS
+// keeps delivering the keypad's keystrokes to other apps (verified on
+// macOS 27), with a seize open it does not.
+func applyOpenMode(seize bool) {
+	hid.SetOpenExclusive(seize)
 }
 
 func platformSeizeSupport() SeizeSupport {
 	return SeizeSupport{
 		Supported: true,
-		Note:      "darwin: requests kIOHIDOptionsTypeSeizeDevice via hidapi; macOS claims TLC routing on IOHIDDeviceOpen regardless, so this flag is documented intent rather than the observable gate",
+		Note:      "darwin: seize opens with kIOHIDOptionsTypeSeizeDevice (needs root for keyboard TLCs); shared opens with kIOHIDOptionsTypeNone",
 	}
 }

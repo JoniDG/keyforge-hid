@@ -332,31 +332,35 @@ ten keys become distinguishable.**
 
 ### 5.1 macOS
 
-Tested against macOS Sequoia (15.x).
+Tested against macOS Sequoia (15.x) and macOS 27.
 
-- **Opening the device requires elevated permission**. `Input
-  Monitoring` granted to the binary alone returns a clearer error code
-  but still rejects the open. Running `cmd/probe` under `sudo` works
-  for development; the productive flow (signed binary with
-  Input Monitoring + Accessibility entitlements granted by the user
-  through System Settings) is on the roadmap once the daemon ships in
-  Fase 3.
+- **Seize needs root, shared does not**. Opening a keyboard TLC
+  (UsagePage `0x01` / Usage `0x06`) with `kIOHIDOptionsTypeSeizeDevice`
+  as a regular user fails with `0xE00002C1` (privilege violation);
+  `cmd/probe` works under `sudo`. Opening the same TLC with
+  `kIOHIDOptionsTypeNone` (`-shared`, or `WithSeize(false)`) works
+  without `sudo` (verified on macOS 27). The productive seize flow
+  (signed binary with Input Monitoring + Accessibility entitlements
+  granted through System Settings) is on the roadmap once the daemon
+  ships.
 
-- **Implicit seize on `IOHIDDeviceOpen`**. Opening any of this device's
-  TLCs via hidapi appears to claim the OS routing for that TLC
-  regardless of whether `kIOHIDOptionsTypeSeizeDevice` is passed. In
-  practice this means the OS HID services stop delivering volume /
-  mute / keyboard events to other apps as soon as KeyForge holds the
-  TLC open. `device.SetSeize(true)` still calls
-  `hid_darwin_set_open_exclusive(1)` so the intent is recorded and any
-  future macOS release that distinguishes the option does the right
-  thing — but it is not the observable gate today.
+- **hidapi resets the open mode to seize on init**. Per
+  `hid_darwin.c::hid_init`, creating the HID manager sets the global
+  option to `kIOHIDOptionsTypeSeizeDevice` ("Backward compatibility").
+  That happens on the first init and again after every `hid_exit`,
+  and `hid_open_path` runs `hid_init` itself. A flag set before an
+  enumeration (which inits and exits) is therefore lost by the time
+  the device opens. `device.SetSeize` only records the requested mode;
+  the opener applies it after an explicit `hid.Init`, right before
+  `hid.OpenPath`, under a lock shared with the enumerator.
 
-- **hidapi defaults to exclusive open**. Per
-  `hid_darwin.c::hid_init`, the global option starts at
-  `kIOHIDOptionsTypeSeizeDevice` ("Backward compatibility"). Callers
-  that want shared mode must call `device.SetSeize(false)` explicitly;
-  omitting the call leaves the device seized.
+- **The option decides OS routing**. With a shared open, KeyForge
+  receives every report and the OS keeps delivering the keystrokes to
+  the focused app (verified on macOS 27: F16/F17 reached the terminal
+  while `probe -shared` printed them). With a seize open, the OS stops
+  delivering them. An earlier note called seize decorative on Sequoia
+  because both of its runs saw the OS lose the events; both were seize
+  opens because of the reset above.
 
 ### 5.2 Linux (planned)
 
@@ -400,14 +404,13 @@ make build
 ./bin/probe
 
 # Stream typed protocol.InputEvent JSON lines from every declared
-# input on the recognized device (multi-interface, default). On macOS
-# this needs sudo for the open() to succeed.
+# input on the recognized device (multi-interface, default). The probe
+# seizes by default, which on macOS needs sudo (see §5.1).
 sudo ./bin/probe -stream -events
 
-# Same, but skip the seize request (opens HID devices in shared mode).
-# Useful when comparing OS-side behavior, even though on macOS the
-# observable result is currently identical (see §5.1).
-sudo ./bin/probe -stream -events -shared
+# Same, but skip the seize request (opens HID devices in shared mode,
+# the OS keeps receiving the reports). No sudo needed on macOS.
+./bin/probe -stream -events -shared
 ```
 
 ### Vendor interface

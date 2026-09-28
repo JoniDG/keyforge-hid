@@ -10,13 +10,17 @@ import (
 type Opener interface {
 	// Open returns an InputStream backed by the device located at
 	// the given platform-specific path (the same value reported in
-	// Info.Path during enumeration).
+	// Info.Path during enumeration). The device is opened in the mode
+	// last accepted by SetSeize.
 	Open(path string) (InputStream, error)
 }
 
 // NewOpener returns an Opener backed by hidapi via sstallion/go-hid.
 func NewOpener() Opener {
 	return &hidOpener{
+		init:          hid.Init,
+		seize:         seizeRequested.Load,
+		applyOpenMode: applyOpenMode,
 		openPath: func(path string) (hidDevice, error) {
 			return hid.OpenPath(path)
 		},
@@ -24,13 +28,34 @@ func NewOpener() Opener {
 }
 
 type hidOpener struct {
-	openPath func(path string) (hidDevice, error)
+	init          func() error
+	seize         func() bool
+	applyOpenMode func(seize bool)
+	openPath      func(path string) (hidDevice, error)
 }
 
 func (o *hidOpener) Open(path string) (InputStream, error) {
+	dev, err := o.open(path)
+	if err != nil {
+		return nil, err
+	}
+	return newStream(dev), nil
+}
+
+// open applies the open mode after an explicit init and under hidapiMu,
+// so neither the implicit init inside openPath nor a concurrent
+// enumeration can reset it before the device is opened.
+func (o *hidOpener) open(path string) (hidDevice, error) {
+	hidapiMu.Lock()
+	defer hidapiMu.Unlock()
+
+	if err := o.init(); err != nil {
+		return nil, fmt.Errorf("device.Open %q: %w: %w", path, ErrInit, err)
+	}
+	o.applyOpenMode(o.seize())
 	dev, err := o.openPath(path)
 	if err != nil {
 		return nil, fmt.Errorf("device.Open %q: %w: %w", path, ErrOpen, err)
 	}
-	return newStream(dev), nil
+	return dev, nil
 }

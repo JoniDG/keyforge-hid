@@ -29,6 +29,9 @@ func setSeize(enabled bool) error {
 	return ErrSeizeNotImplemented
 }
 
+// applyOpenMode is a no-op: hidapi exposes no open-mode flag here.
+func applyOpenMode(bool) {}
+
 func platformSeizeSupport() SeizeSupport {
 	return SeizeSupport{
 		Supported: false,

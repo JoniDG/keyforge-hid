@@ -67,3 +67,20 @@ func TestPlatformSeizeSupport_ShouldMatchCurrentGOOS(t *testing.T) {
 		assert.False(t, support.Supported, "unknown platform must report supported=false")
 	}
 }
+
+func TestSetSeize_ShouldRecordAcceptedModeForOpeners(t *testing.T) {
+	// Not parallel: reads the process-wide mode other tests toggle.
+	t.Cleanup(func() { seizeRequested.Store(false) })
+
+	require.NoError(t, SetSeize(false))
+	assert.False(t, seizeRequested.Load())
+
+	err := SetSeize(true)
+	if PlatformSeizeSupport().Supported {
+		require.NoError(t, err)
+		assert.True(t, seizeRequested.Load())
+	} else {
+		require.ErrorIs(t, err, ErrSeizeNotImplemented)
+		assert.False(t, seizeRequested.Load(), "a rejected seize request must leave the mode shared")
+	}
+}
