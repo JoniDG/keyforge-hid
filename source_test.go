@@ -342,19 +342,29 @@ func TestStream_WhenEnumerationFails_ShouldWrapError(t *testing.T) {
 
 func TestStream_WhenSeizeRequestedButUnsupported_ShouldFailBeforeOpening(t *testing.T) {
 	t.Parallel()
-	boom := errors.New("seize unsupported")
 	opener := &stubOpener{}
 	enum := fakeEnumerator{infos: []device.Info{keyboardInfo("kb", ""), encoderInfo("enc", "")}}
 	s := newSource(enum, opener, WithSeize(true))
 	s.setSeize = func(enabled bool) error {
 		require.True(t, enabled)
-		return boom
+		return device.ErrSeizeNotImplemented
 	}
 
 	err := s.Stream(context.Background(), func(protocol.InputEvent) error { return nil })
 
-	assert.ErrorIs(t, err, boom)
+	assert.ErrorIs(t, err, ErrSeizeNotImplemented)
 	assert.Empty(t, opener.openCalls())
+}
+
+func TestSeizeSupport_ShouldMirrorPlatformSeizeSupport(t *testing.T) {
+	t.Parallel()
+	want := device.PlatformSeizeSupport()
+
+	supported, note := SeizeSupport()
+
+	assert.Equal(t, want.Supported, supported)
+	assert.Equal(t, want.Note, note)
+	assert.NotEmpty(t, note)
 }
 
 func TestStream_WhenSinkReturnsError_ShouldPropagate(t *testing.T) {
