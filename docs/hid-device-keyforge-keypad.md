@@ -72,7 +72,7 @@ events, and the ten keys emit the same chord.
 
 ### 2.1 KeyForge layout
 
-`Source.Provision()` (or `probe -provision`) rewrites the device's
+`Source.Provision(ctx)` (or `probe -provision`) rewrites the device's
 input slots (§4.3) so every input emits a distinct code. The layout
 persists on the device; `probe -factory-layout` writes the factory
 values back slot by slot.
@@ -444,7 +444,7 @@ or layout.
 ## 7. Known limitations and open follow-ups
 
 - **Provisioning is manual.** Keys and encoders are only distinct
-  after `Source.Provision()` runs; nothing calls it automatically yet.
+  after `Source.Provision(ctx)` runs; nothing calls it automatically yet.
   Bindings made against the factory chord (`mod_lctrl` / `key_0x04`)
   stop matching once the keypad is provisioned.
 - **OS side effects of F13–F22.** Without seize, some provisioned keys

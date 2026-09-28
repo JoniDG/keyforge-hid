@@ -10,6 +10,7 @@ package vendor
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -75,6 +76,11 @@ type transport interface {
 
 // Client sends commands over an opened vendor interface. It is not safe
 // for concurrent use: every command is a write followed by its ack.
+//
+// Every command takes a ctx that is checked before the write and on each
+// ack poll, so cancellation is noticed within pollTimeout. A Write or
+// open blocked inside hidapi cannot be interrupted; ctx is honored once
+// it returns.
 type Client struct {
 	t          transport
 	limits     Limits
@@ -104,11 +110,11 @@ func (c *Client) Close() error {
 }
 
 // ReadSlots returns every input slot within the client's limits.
-func (c *Client) ReadSlots() ([]Slot, error) {
+func (c *Client) ReadSlots(ctx context.Context) ([]Slot, error) {
 	size := c.limits.Slots * slotSize
 	data := make([]byte, 0, size)
 	for off := 0; off < size; off += slotChunkSize {
-		reply, err := c.exchange(ackReadSlots, readEchoLen,
+		reply, err := c.exchange(ctx, ackReadSlots, readEchoLen,
 			cmdReadSlots, lenReadSlots, byte(off), byte(off>>8), 0x00, layer)
 		if err != nil {
 			return nil, fmt.Errorf("vendor.ReadSlots: %w", err)
@@ -126,14 +132,14 @@ func (c *Client) ReadSlots() ([]Slot, error) {
 
 // WriteSlot stores s in the given input slot. The change takes effect
 // immediately and persists on the device.
-func (c *Client) WriteSlot(index int, s Slot) error {
+func (c *Client) WriteSlot(ctx context.Context, index int, s Slot) error {
 	if index < 0 || index >= c.limits.Slots {
 		return fmt.Errorf("vendor.WriteSlot (index %d, limit %d): %w", index, c.limits.Slots, ErrInvalidArgument)
 	}
 	off := index * slotSize
 	payload := []byte{cmdWriteSlot, lenWriteSlot, byte(off), byte(off >> 8), 0x00, layer, 0x00,
 		byte(s.Type), s.Codes[0], s.Codes[1], s.Codes[2]}
-	if _, err := c.exchange(cmdWriteSlot, len(payload)-2, payload...); err != nil {
+	if _, err := c.exchange(ctx, cmdWriteSlot, len(payload)-2, payload...); err != nil {
 		return fmt.Errorf("vendor.WriteSlot: %w", err)
 	}
 	return nil
@@ -143,11 +149,11 @@ func (c *Client) WriteSlot(index int, s Slot) error {
 // slot, index = slot) and returns how many it had to write. Slots that
 // already match are left alone, so applying the same layout twice
 // writes nothing the second time.
-func (c *Client) ApplySlots(want []Slot) (int, error) {
+func (c *Client) ApplySlots(ctx context.Context, want []Slot) (int, error) {
 	if len(want) != c.limits.Slots {
 		return 0, fmt.Errorf("vendor.ApplySlots (got %d slots, want %d): %w", len(want), c.limits.Slots, ErrInvalidArgument)
 	}
-	current, err := c.ReadSlots()
+	current, err := c.ReadSlots(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("vendor.ApplySlots: %w", err)
 	}
@@ -156,7 +162,7 @@ func (c *Client) ApplySlots(want []Slot) (int, error) {
 		if current[i] == slot {
 			continue
 		}
-		if err := c.WriteSlot(i, slot); err != nil {
+		if err := c.WriteSlot(ctx, i, slot); err != nil {
 			return written, fmt.Errorf("vendor.ApplySlots (slot %d): %w", i, err)
 		}
 		written++
@@ -165,14 +171,14 @@ func (c *Client) ApplySlots(want []Slot) (int, error) {
 }
 
 // SetEffect replaces the keypad-wide lighting effect.
-func (c *Client) SetEffect(e Effect) error {
+func (c *Client) SetEffect(ctx context.Context, e Effect) error {
 	mode := byte(0x02)
 	if e.Mono {
 		mode = 0x03
 	}
 	payload := []byte{cmdSetEffect, lenSetEffect, 0x00, 0x00, 0x01, 0x00,
 		byte(e.Style), e.Speed, mode, 0x01, 0x01, 0x00, e.Color.H, e.Color.S, e.Color.V}
-	if _, err := c.exchange(cmdSetEffect, len(payload)-2, payload...); err != nil {
+	if _, err := c.exchange(ctx, cmdSetEffect, len(payload)-2, payload...); err != nil {
 		return fmt.Errorf("vendor.SetEffect: %w", err)
 	}
 	return nil
@@ -180,13 +186,13 @@ func (c *Client) SetEffect(e Effect) error {
 
 // SetKeyColor sets one key's LED. The color only shows while the effect
 // style is StyleUserLight.
-func (c *Client) SetKeyColor(led int, color RGB) error {
+func (c *Client) SetKeyColor(ctx context.Context, led int, color RGB) error {
 	if led < 0 || led >= c.limits.LEDs {
 		return fmt.Errorf("vendor.SetKeyColor (led %d, limit %d): %w", led, c.limits.LEDs, ErrInvalidArgument)
 	}
 	payload := []byte{cmdSetKeyColor, lenSetKeyColor, byte(led * 3), 0x00, 0x00, 0x00, 0x00,
 		color.R, color.G, color.B}
-	if _, err := c.exchange(cmdSetKeyColor, len(payload)-2, payload...); err != nil {
+	if _, err := c.exchange(ctx, cmdSetKeyColor, len(payload)-2, payload...); err != nil {
 		return fmt.Errorf("vendor.SetKeyColor: %w", err)
 	}
 	return nil
@@ -196,12 +202,16 @@ func (c *Client) SetKeyColor(led int, color RGB) error {
 // counts as the ack when it carries ackCmd and echoes the first echoLen
 // bytes of the payload after the length field, so a late ack left over
 // from an earlier timed-out command is skipped rather than taken as
-// confirmation of this one.
-func (c *Client) exchange(ackCmd byte, echoLen int, payload ...byte) ([]byte, error) {
+// confirmation of this one. It returns ctx.Err() (wrapped) once ctx is
+// done, before writing or between ack polls.
+func (c *Client) exchange(ctx context.Context, ackCmd byte, echoLen int, payload ...byte) ([]byte, error) {
 	// The interface has no report IDs, so hidapi expects a leading 0x00.
 	out := make([]byte, 1+reportLength)
 	out[1] = commandClass
 	copy(out[2:], payload)
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("command 0x%02x: %w", payload[0], err)
+	}
 	if _, err := c.t.Write(out); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrWrite, err)
 	}
@@ -210,6 +220,9 @@ func (c *Client) exchange(ackCmd byte, echoLen int, payload ...byte) ([]byte, er
 	in := make([]byte, reportLength)
 	deadline := time.Now().Add(c.ackTimeout)
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("command 0x%02x: %w", payload[0], err)
+		}
 		n, err := c.t.ReadWithTimeout(in, pollTimeout)
 		if errors.Is(err, hid.ErrTimeout) {
 			continue
@@ -221,6 +234,11 @@ func (c *Client) exchange(ackCmd byte, echoLen int, payload ...byte) ([]byte, er
 			bytes.Equal(in[echoStart:echoStart+echoLen], echo) {
 			return in, nil
 		}
+	}
+	// ctx may expire during the last poll; report it rather than ErrNoAck
+	// so callers can tell their own timeout from a silent device.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("command 0x%02x: %w", payload[0], err)
 	}
 	return nil, fmt.Errorf("command 0x%02x: %w", payload[0], ErrNoAck)
 }

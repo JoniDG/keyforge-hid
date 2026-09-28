@@ -305,12 +305,15 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 	}
 	defer func() { _ = client.Close() }()
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if req.provision || req.factoryLayout {
 		name, layout := "KeyForge", target.Known.Vendor.Layout
 		if req.factoryLayout {
 			name, layout = "factory", target.Known.Vendor.Factory
 		}
-		written, err := client.ApplySlots(layout)
+		written, err := client.ApplySlots(ctx, layout)
 		if err != nil {
 			return fmt.Errorf("probe: %w", err)
 		}
@@ -320,20 +323,20 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 	// Colors are stored apart from the effect, so the color goes first:
 	// a rejected LED then leaves the current effect untouched.
 	if lighting.led != nil {
-		if err := client.SetKeyColor(*lighting.led, *lighting.color); err != nil {
+		if err := client.SetKeyColor(ctx, *lighting.led, *lighting.color); err != nil {
 			return fmt.Errorf("probe: %w", err)
 		}
 		c := lighting.color
 		fmt.Printf("led %d set to %02x%02x%02x\n", *lighting.led, c.R, c.G, c.B)
 	}
 	if lighting.effect != nil {
-		if err := client.SetEffect(*lighting.effect); err != nil {
+		if err := client.SetEffect(ctx, *lighting.effect); err != nil {
 			return fmt.Errorf("probe: %w", err)
 		}
 		fmt.Printf("effect set to style 0x%02x\n", byte(lighting.effect.Style))
 	}
 	if req.readSlots {
-		slots, err := client.ReadSlots()
+		slots, err := client.ReadSlots(ctx)
 		if err != nil {
 			return fmt.Errorf("probe: %w", err)
 		}

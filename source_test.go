@@ -3,6 +3,7 @@ package hid
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -28,9 +29,17 @@ const (
 type fakeEnumerator struct {
 	infos []device.Info
 	err   error
+	// honorCtx makes List fail with ctx.Err() once ctx is done, like the
+	// real enumerator.
+	honorCtx bool
 }
 
-func (e fakeEnumerator) List(context.Context) ([]device.Info, error) {
+func (e fakeEnumerator) List(ctx context.Context) ([]device.Info, error) {
+	if e.honorCtx {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	return e.infos, e.err
 }
 
@@ -438,10 +447,17 @@ type fakeApplier struct {
 	applyErr   error
 	closeErr   error
 	closeCalls int
+	// cancel, when set, simulates ctx being cancelled mid-apply: it is
+	// called and ApplySlots fails with ctx.Err() like the real client.
+	cancel context.CancelFunc
 }
 
-func (f *fakeApplier) ApplySlots(want []vendor.Slot) (int, error) {
+func (f *fakeApplier) ApplySlots(ctx context.Context, want []vendor.Slot) (int, error) {
 	f.applied = want
+	if f.cancel != nil {
+		f.cancel()
+		return 0, fmt.Errorf("vendor.ApplySlots: %w", ctx.Err())
+	}
 	return len(want), f.applyErr
 }
 
@@ -472,7 +488,7 @@ func TestProvision_WhenVendorInterfaceEnumerated_ShouldApplyKeyForgeLayout(t *te
 	applier := &fakeApplier{}
 	s, path, limits := provisionSource([]device.Info{keyboardInfo("kb", ""), vendorInfo("vendor")}, applier, nil)
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, "vendor", *path)
@@ -486,7 +502,7 @@ func TestProvision_WhenVendorInterfaceNotEnumerated_ShouldReturnErrNoVendorInter
 	applier := &fakeApplier{}
 	s, path, _ := provisionSource([]device.Info{keyboardInfo("kb", "")}, applier, nil)
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	assert.ErrorIs(t, err, ErrNoVendorInterface)
 	assert.Empty(t, *path, "must not open anything")
@@ -496,7 +512,7 @@ func TestProvision_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {
 	t.Parallel()
 	s, _, _ := provisionSource([]device.Info{{Path: "x", VendorID: 0x1111, ProductID: 0x2222}}, &fakeApplier{}, nil)
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	assert.ErrorIs(t, err, ErrNoRecognizedDevice)
 }
@@ -506,7 +522,7 @@ func TestProvision_WhenEnumerationFails_ShouldWrapError(t *testing.T) {
 	boom := errors.New("enumerate boom")
 	s := newSource(fakeEnumerator{err: boom}, &stubOpener{})
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	assert.ErrorIs(t, err, boom)
 }
@@ -516,7 +532,7 @@ func TestProvision_WhenOpenFails_ShouldWrapError(t *testing.T) {
 	boom := errors.New("open boom")
 	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, boom)
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	assert.ErrorIs(t, err, boom)
 }
@@ -527,7 +543,7 @@ func TestProvision_WhenApplyFails_ShouldWrapErrorAndStillClose(t *testing.T) {
 	applier := &fakeApplier{applyErr: boom}
 	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, applier, nil)
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	assert.ErrorIs(t, err, boom)
 	assert.Equal(t, 1, applier.closeCalls)
@@ -538,9 +554,48 @@ func TestProvision_WhenCloseFails_ShouldWrapError(t *testing.T) {
 	boom := errors.New("close boom")
 	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{closeErr: boom}, nil)
 
-	err := s.Provision()
+	err := s.Provision(context.Background())
 
 	assert.ErrorIs(t, err, boom)
+}
+
+func TestProvision_WhenContextDoneBeforeEnumeration_ShouldReturnCtxErrWithoutOpening(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, nil)
+	s.enumerator = fakeEnumerator{infos: []device.Info{vendorInfo("vendor")}, honorCtx: true}
+
+	err := s.Provision(ctx)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, *path, "must not open the vendor interface")
+}
+
+func TestProvision_WhenContextDoneBeforeOpening_ShouldReturnWrappedCtxErrWithoutOpening(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, nil)
+
+	err := s.Provision(ctx)
+
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "hid.Provision")
+	assert.Empty(t, *path, "must not open the vendor interface")
+}
+
+func TestProvision_WhenContextCancelledDuringApply_ShouldWrapCtxErrAndStillClose(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	applier := &fakeApplier{cancel: cancel}
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, applier, nil)
+
+	err := s.Provision(ctx)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "hid.Provision")
+	assert.Equal(t, 1, applier.closeCalls)
 }
 
 // The layout Provision writes, the catalog DiscoverDevice reports and the

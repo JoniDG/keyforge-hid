@@ -106,7 +106,9 @@ recognized keypad (and the `DeviceID` its events will carry) before streaming;
 can persist and describe it without opening it; `Provision` writes the KeyForge
 input layout to the keypad so every key and encoder emits a distinct code (the
 catalog describes the provisioned keypad; see
-[the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout));
+[the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout)),
+and gives up with the wrapped `ctx.Err()` once its context is cancelled or
+times out, so pass a short deadline if the keypad may not answer;
 `Stream` blocks delivering
 decoded `protocol.InputEvent` values until the context is cancelled, the sink
 returns an error, or a reader fails.
