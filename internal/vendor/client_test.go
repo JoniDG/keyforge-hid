@@ -1,6 +1,7 @@
 package vendor
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ type fakeTransport struct {
 	respond    func(out []byte) [][]byte
 	writeErr   error
 	readErr    error
+	onRead     func()
 	closeErr   error
 	closeCalls int
 }
@@ -34,6 +36,9 @@ func (f *fakeTransport) Write(p []byte) (int, error) {
 }
 
 func (f *fakeTransport) ReadWithTimeout(p []byte, _ time.Duration) (int, error) {
+	if f.onRead != nil {
+		f.onRead()
+	}
 	if f.readErr != nil {
 		return 0, f.readErr
 	}
@@ -155,7 +160,7 @@ func TestClient_ReadSlots_WhenDeviceAnswers_ShouldDecodeEveryChunk(t *testing.T)
 	f := &fakeTransport{respond: deviceAck(factorySlotData())}
 	c := newTestClient(f)
 
-	slots, err := c.ReadSlots()
+	slots, err := c.ReadSlots(context.Background())
 
 	require.NoError(t, err)
 	require.Len(t, slots, 22)
@@ -180,7 +185,7 @@ func TestClient_ReadSlots_WhenOnlyAStaleOffsetArrives_ShouldReturnErrNoAck(t *te
 	}}
 	c := newTestClient(f)
 
-	_, err := c.ReadSlots()
+	_, err := c.ReadSlots(context.Background())
 
 	assert.ErrorIs(t, err, ErrNoAck)
 }
@@ -189,7 +194,7 @@ func TestClient_ReadSlots_WhenExchangeFails_ShouldWrapCause(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(&fakeTransport{})
 
-	_, err := c.ReadSlots()
+	_, err := c.ReadSlots(context.Background())
 
 	assert.ErrorIs(t, err, ErrNoAck)
 }
@@ -199,7 +204,7 @@ func TestClient_WriteSlot_WhenValid_ShouldSendSlotAtItsOffset(t *testing.T) {
 	f := &fakeTransport{respond: deviceAck(nil)}
 	c := newTestClient(f)
 
-	err := c.WriteSlot(19, KeyboardSlot(0x00, 0x69))
+	err := c.WriteSlot(context.Background(), 19, KeyboardSlot(0x00, 0x69))
 
 	require.NoError(t, err)
 	require.Len(t, f.writes, 1)
@@ -214,7 +219,7 @@ func TestClient_WriteSlot_WhenIndexIsInvalid_ShouldReturnErrInvalidArgument(t *t
 		f := &fakeTransport{}
 		c := newTestClient(f)
 
-		err := c.WriteSlot(index, DisabledSlot())
+		err := c.WriteSlot(context.Background(), index, DisabledSlot())
 
 		assert.ErrorIs(t, err, ErrInvalidArgument, "index %d", index)
 		assert.Empty(t, f.writes)
@@ -226,7 +231,7 @@ func TestClient_WriteSlot_WhenWriteFails_ShouldWrapErrWrite(t *testing.T) {
 	cause := errors.New("pipe")
 	c := newTestClient(&fakeTransport{writeErr: cause})
 
-	err := c.WriteSlot(0, DisabledSlot())
+	err := c.WriteSlot(context.Background(), 0, DisabledSlot())
 
 	assert.ErrorIs(t, err, ErrWrite)
 	assert.ErrorIs(t, err, cause)
@@ -248,7 +253,7 @@ func TestClient_SetEffect_ShouldEncodeStyleSpeedModeAndColor(t *testing.T) {
 			f := &fakeTransport{respond: deviceAck(nil)}
 			c := newTestClient(f)
 
-			err := c.SetEffect(tt.effect)
+			err := c.SetEffect(context.Background(), tt.effect)
 
 			require.NoError(t, err)
 			require.Len(t, f.writes, 1)
@@ -264,7 +269,7 @@ func TestClient_SetEffect_WhenNoAck_ShouldReturnErrNoAck(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(&fakeTransport{})
 
-	err := c.SetEffect(Effect{Style: StyleOff})
+	err := c.SetEffect(context.Background(), Effect{Style: StyleOff})
 
 	assert.ErrorIs(t, err, ErrNoAck)
 }
@@ -274,7 +279,7 @@ func TestClient_SetKeyColor_WhenValid_ShouldSendColorAtLedOffset(t *testing.T) {
 	f := &fakeTransport{respond: deviceAck(nil)}
 	c := newTestClient(f)
 
-	err := c.SetKeyColor(9, RGB{R: 0xFF, G: 0x80, B: 0x01})
+	err := c.SetKeyColor(context.Background(), 9, RGB{R: 0xFF, G: 0x80, B: 0x01})
 
 	require.NoError(t, err)
 	require.Len(t, f.writes, 1)
@@ -289,7 +294,7 @@ func TestClient_SetKeyColor_WhenLedIsInvalid_ShouldReturnErrInvalidArgument(t *t
 		f := &fakeTransport{}
 		c := newTestClient(f)
 
-		err := c.SetKeyColor(led, RGB{})
+		err := c.SetKeyColor(context.Background(), led, RGB{})
 
 		assert.ErrorIs(t, err, ErrInvalidArgument, "led %d", led)
 		assert.Empty(t, f.writes)
@@ -300,7 +305,7 @@ func TestClient_SetKeyColor_WhenNoAck_ShouldReturnErrNoAck(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(&fakeTransport{})
 
-	err := c.SetKeyColor(0, RGB{})
+	err := c.SetKeyColor(context.Background(), 0, RGB{})
 
 	assert.ErrorIs(t, err, ErrNoAck)
 }
@@ -317,7 +322,7 @@ func TestClient_Exchange_WhenUnrelatedReportsArriveFirst_ShouldSkipThemUntilAck(
 	}}
 	c := newTestClient(f)
 
-	err := c.WriteSlot(0, DisabledSlot())
+	err := c.WriteSlot(context.Background(), 0, DisabledSlot())
 
 	assert.NoError(t, err)
 	assert.Empty(t, f.pending)
@@ -331,7 +336,7 @@ func TestClient_Exchange_WhenALateAckForAnotherPayloadArrives_ShouldNotTakeItAsC
 	f := &fakeTransport{respond: func([]byte) [][]byte { return [][]byte{stale} }}
 	c := newTestClient(f)
 
-	err := c.WriteSlot(0, KeyboardSlot(0x01, 0x04))
+	err := c.WriteSlot(context.Background(), 0, KeyboardSlot(0x01, 0x04))
 
 	assert.ErrorIs(t, err, ErrNoAck)
 }
@@ -341,7 +346,7 @@ func TestClient_Exchange_WhenReadFails_ShouldWrapErrRead(t *testing.T) {
 	cause := errors.New("unplugged")
 	c := newTestClient(&fakeTransport{readErr: cause})
 
-	err := c.SetEffect(Effect{})
+	err := c.SetEffect(context.Background(), Effect{})
 
 	assert.ErrorIs(t, err, ErrRead)
 	assert.ErrorIs(t, err, cause)
@@ -355,11 +360,11 @@ func TestClient_ExportedCommands_ShouldOnlySendVerifiedCommands(t *testing.T) {
 	f := &fakeTransport{respond: deviceAck(factorySlotData())}
 	c := newTestClient(f)
 
-	_, err := c.ReadSlots()
+	_, err := c.ReadSlots(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, c.WriteSlot(0, KeyboardSlot(0x01, 0x04)))
-	require.NoError(t, c.SetEffect(Effect{Style: StyleSpectrum}))
-	require.NoError(t, c.SetKeyColor(0, RGB{}))
+	require.NoError(t, c.WriteSlot(context.Background(), 0, KeyboardSlot(0x01, 0x04)))
+	require.NoError(t, c.SetEffect(context.Background(), Effect{Style: StyleSpectrum}))
+	require.NoError(t, c.SetKeyColor(context.Background(), 0, RGB{}))
 
 	allowed := map[byte]bool{cmdReadSlots: true, cmdWriteSlot: true, cmdSetEffect: true, cmdSetKeyColor: true}
 	for _, raw := range f.writes {
@@ -374,13 +379,13 @@ func TestClient_ApplySlots_ShouldWriteOnlyTheSlotsThatDiffer(t *testing.T) {
 	current := factorySlotData()
 	f := &fakeTransport{respond: deviceAck(current)}
 	c := newTestClient(f)
-	want, err := c.ReadSlots()
+	want, err := c.ReadSlots(context.Background())
 	require.NoError(t, err)
 	want[0] = KeyboardSlot(0x00, 0x68)
 	want[19] = ConsumerSlot(0x00CD)
 	f.writes = nil
 
-	written, err := c.ApplySlots(want)
+	written, err := c.ApplySlots(context.Background(), want)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, written)
@@ -393,10 +398,10 @@ func TestClient_ApplySlots_WhenAlreadyApplied_ShouldWriteNothing(t *testing.T) {
 	t.Parallel()
 	f := &fakeTransport{respond: deviceAck(factorySlotData())}
 	c := newTestClient(f)
-	want, err := c.ReadSlots()
+	want, err := c.ReadSlots(context.Background())
 	require.NoError(t, err)
 
-	written, err := c.ApplySlots(want)
+	written, err := c.ApplySlots(context.Background(), want)
 
 	require.NoError(t, err)
 	assert.Zero(t, written)
@@ -407,7 +412,7 @@ func TestClient_ApplySlots_WhenLengthDoesNotMatchLimits_ShouldReturnErrInvalidAr
 	f := &fakeTransport{}
 	c := newTestClient(f)
 
-	written, err := c.ApplySlots(make([]Slot, 3))
+	written, err := c.ApplySlots(context.Background(), make([]Slot, 3))
 
 	assert.Zero(t, written)
 	assert.ErrorIs(t, err, ErrInvalidArgument)
@@ -418,7 +423,7 @@ func TestClient_ApplySlots_WhenReadFails_ShouldWrapError(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(&fakeTransport{})
 
-	_, err := c.ApplySlots(make([]Slot, testLimits.Slots))
+	_, err := c.ApplySlots(context.Background(), make([]Slot, testLimits.Slots))
 
 	assert.ErrorIs(t, err, ErrNoAck)
 }
@@ -440,8 +445,96 @@ func TestClient_ApplySlots_WhenAWriteFails_ShouldReportSlotsWrittenSoFar(t *test
 		want[i] = KeyboardSlot(0x00, 0x68)
 	}
 
-	written, err := c.ApplySlots(want)
+	written, err := c.ApplySlots(context.Background(), want)
 
 	assert.Equal(t, 1, written)
 	assert.ErrorIs(t, err, ErrNoAck)
+}
+
+func TestClient_WhenContextAlreadyDone_ShouldReturnCtxErrWithoutWriting(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f := &fakeTransport{respond: deviceAck(factorySlotData())}
+	c := newTestClient(f)
+
+	_, readErr := c.ReadSlots(ctx)
+	writeErr := c.WriteSlot(ctx, 0, DisabledSlot())
+	effectErr := c.SetEffect(ctx, Effect{})
+	colorErr := c.SetKeyColor(ctx, 0, RGB{})
+	_, applyErr := c.ApplySlots(ctx, make([]Slot, testLimits.Slots))
+
+	for _, err := range []error{readErr, writeErr, effectErr, colorErr, applyErr} {
+		assert.ErrorIs(t, err, context.Canceled)
+	}
+	assert.Empty(t, f.writes)
+}
+
+func TestClient_WhenContextCancelledWhileWaitingForAck_ShouldReturnCtxErr(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &fakeTransport{onRead: cancel}
+	c := &Client{t: f, limits: testLimits, ackTimeout: time.Minute}
+
+	err := c.WriteSlot(ctx, 0, DisabledSlot())
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, ErrNoAck)
+	assert.Len(t, f.writes, 1)
+}
+
+func TestClient_WhenContextDeadlineExceededWhileWaitingForAck_ShouldReturnDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	c := &Client{t: &fakeTransport{}, limits: testLimits, ackTimeout: time.Minute}
+
+	err := c.SetEffect(ctx, Effect{})
+
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestClient_ApplySlots_WhenContextCancelledBetweenSlots_ShouldStopAndReportWritten(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	ack := deviceAck(factorySlotData())
+	f := &fakeTransport{}
+	slotWrites := 0
+	f.respond = func(out []byte) [][]byte {
+		if out[2] == cmdWriteSlot {
+			slotWrites++
+			if slotWrites == 2 {
+				cancel()
+			}
+		}
+		return ack(out)
+	}
+	c := newTestClient(f)
+	want := make([]Slot, testLimits.Slots)
+	for i := range want {
+		want[i] = KeyboardSlot(0x00, 0x68)
+	}
+
+	written, err := c.ApplySlots(ctx, want)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, written, "only the slot acked before cancellation counts")
+	assert.Equal(t, 2, slotWrites, "no slot write is sent after cancellation")
+}
+
+func TestClient_WhenContextDoneAsAckTimeoutExpires_ShouldReturnCtxErrNotErrNoAck(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &fakeTransport{respond: func([]byte) [][]byte {
+		cancel()
+		return nil
+	}}
+	// A zero ack window skips the poll loop, so only the post-loop check
+	// can see the cancellation.
+	c := &Client{t: f, limits: testLimits, ackTimeout: 0}
+
+	err := c.WriteSlot(ctx, 0, DisabledSlot())
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, ErrNoAck)
 }

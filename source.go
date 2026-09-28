@@ -63,7 +63,7 @@ type Source struct {
 
 // slotApplier is the part of *vendor.Client that Provision needs.
 type slotApplier interface {
-	ApplySlots(want []vendor.Slot) (int, error)
+	ApplySlots(ctx context.Context, want []vendor.Slot) (int, error)
 	Close() error
 }
 
@@ -166,15 +166,22 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 // already provisioned keypad changes nothing. It returns
 // ErrNoRecognizedDevice when no recognized device is connected and
 // ErrNoVendorInterface when the device cannot be configured. On any
-// other error the keypad may be partially provisioned; calling Provision
-// again converges.
+// other error, cancellation included, the keypad may be partially
+// provisioned; calling Provision again converges.
 //
 // Provision opens the vendor interface, which is separate from the ones
 // Stream reads. On the reference keypad under macOS it needs no elevated
 // privileges and works while Stream is running; other platforms are not
 // verified yet.
-func (s *Source) Provision() error {
-	r, err := s.resolve(context.Background())
+//
+// ctx bounds the whole call: once it is cancelled or its deadline passes,
+// Provision stops talking to the keypad, closes the vendor interface and
+// returns ctx.Err() wrapped, so errors.Is(err, context.DeadlineExceeded)
+// holds. Cancellation is checked between commands and while waiting for
+// each ack; a write or open blocked inside hidapi cannot be interrupted,
+// so ctx is honored only once that call returns.
+func (s *Source) Provision(ctx context.Context) error {
+	r, err := s.resolve(ctx)
 	if err != nil {
 		return err
 	}
@@ -182,12 +189,15 @@ func (s *Source) Provision() error {
 	if !ok {
 		return ErrNoVendorInterface
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("hid.Provision: %w", err)
+	}
 	spec := r.target.Known.Vendor
 	client, err := s.openVendor(iface.Path, vendor.Limits{Slots: spec.Slots, LEDs: spec.LEDs})
 	if err != nil {
 		return fmt.Errorf("hid.Provision: %w", err)
 	}
-	_, applyErr := client.ApplySlots(spec.Layout)
+	_, applyErr := client.ApplySlots(ctx, spec.Layout)
 	if err := errors.Join(applyErr, client.Close()); err != nil {
 		return fmt.Errorf("hid.Provision: %w", err)
 	}
