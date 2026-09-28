@@ -87,11 +87,11 @@ See [the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout) for 
 
 #### OS permissions
 
-Reading raw HID reports from a keyboard-class interface requires elevated privileges on every major OS. Without them, `-stream` fails with a permission error before the first read.
+Reading raw HID reports from a keyboard-class interface can require elevated privileges, depending on the OS and on whether the device is seized. Without them, `-stream` fails with a permission error before the first read.
 
 | Platform | What you need |
 |---|---|
-| **macOS** | Grant **Input Monitoring** to your terminal: *System Settings → Privacy & Security → Input Monitoring → +* and add `Terminal.app` (or iTerm, Warp, etc.). Restart the terminal session. Child processes inherit the permission. |
+| **macOS** | Shared mode (`-shared`, or the library default `WithSeize(false)`) needs no `sudo`; grant **Input Monitoring** to your terminal if the open is rejected: *System Settings → Privacy & Security → Input Monitoring → +* and add `Terminal.app` (or iTerm, Warp, etc.), then restart the terminal session. Seizing a keyboard interface needs `sudo`. |
 | **Linux** | Either run as `root` or add a udev rule that grants your user access to `/dev/hidraw*` for the device's VID/PID. The keypad's VID/PID is `0x6d82`/`0xdc83`. |
 | **Windows** | Standard user permissions are usually enough for reading HID; opening with exclusive access (planned for a later phase) needs admin. |
 

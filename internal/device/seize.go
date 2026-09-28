@@ -1,6 +1,10 @@
 package device
 
-import "errors"
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+)
 
 // SeizeSupport describes a platform's ability to take exclusive
 // control of a HID device's input stream, so the OS does not receive
@@ -23,26 +27,39 @@ type SeizeSupport struct {
 // warning and fall back to shared mode when seize is optional.
 var ErrSeizeNotImplemented = errors.New("device: seize not implemented on this platform")
 
+// hidapiMu serializes hidapi's lifecycle calls (Init/Exit in the
+// enumerator) with device opens. On darwin, hid_exit drops the HID
+// manager and the next hid_init resets the process-wide open mode to
+// seize, so an Exit landing between applying the mode and OpenPath
+// would silently turn a shared open into a seize. OpenPath cannot be
+// cancelled, so an open stuck inside hidapi also blocks enumeration.
+var hidapiMu sync.Mutex
+
+// seizeRequested is the open mode SetSeize last accepted. Openers read
+// it right before each open; the zero value is shared.
+var seizeRequested atomic.Bool
+
 // SetSeize requests the desired exclusive-access state for subsequent
 // HID device opens. enabled=true asks the platform to take exclusive
 // control (the OS will not receive the device's reports in parallel);
 // enabled=false asks for shared access (the OS gets a copy of every
 // report alongside our process).
 //
-// The call is idempotent and process-scoped: invoking it once before
-// opening any device is enough, and any later opens inherit the most
-// recently set state.
-//
-// On darwin the call always succeeds. Note that hidapi on darwin
-// initializes its global option to "seize" for backward compatibility
-// the first time hid_init runs (which happens automatically on
-// Enumerate or Open), so callers that want shared mode MUST call
-// SetSeize(false) explicitly — omitting the call leaves seize on.
+// The call is idempotent and process-scoped: devices opened through
+// the Opener after the call use the most recently accepted state, and
+// shared is the state until SetSeize(true) succeeds. Devices already
+// open keep the mode they were opened with.
 //
 // On stubbed platforms, SetSeize(true) returns ErrSeizeNotImplemented
-// and SetSeize(false) returns nil (because shared is the platform
-// default already).
-func SetSeize(enabled bool) error { return setSeize(enabled) }
+// and leaves the state unchanged; SetSeize(false) returns nil (because
+// shared is the platform default already).
+func SetSeize(enabled bool) error {
+	if err := setSeize(enabled); err != nil {
+		return err
+	}
+	seizeRequested.Store(enabled)
+	return nil
+}
 
 // PlatformSeizeSupport returns the seize status of the current build
 // for surfacing in logs, banners or UI.

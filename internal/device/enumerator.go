@@ -37,6 +37,9 @@ func (e *hidEnumerator) List(ctx context.Context) ([]Info, error) {
 		return nil, err
 	}
 
+	hidapiMu.Lock()
+	defer hidapiMu.Unlock()
+
 	if err := e.init(); err != nil {
 		return nil, fmt.Errorf("device.List: %w: %w", ErrInit, err)
 	}
