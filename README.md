@@ -152,6 +152,19 @@ func main() {
 Seizing the device (so the OS stops receiving its reports) is opt-in via
 `WithSeize(true)` and needs the elevated privileges described under
 [OS permissions](#os-permissions); the default keeps shared access.
+On platforms where seizing is still a stub (Linux and Windows today),
+`Stream` on a `WithSeize(true)` source fails with an error wrapping
+`hid.ErrSeizeNotImplemented`, so callers can fall back to shared mode:
+
+```go
+err := hid.New(hid.WithSeize(true)).Stream(ctx, sink)
+if errors.Is(err, hid.ErrSeizeNotImplemented) {
+	err = hid.New().Stream(ctx, sink) // shared: the OS also receives the reports
+}
+```
+
+`hid.SeizeSupport()` reports up front whether the current build can seize,
+plus a one-line note for logs or UI.
 
 ## Layout
 

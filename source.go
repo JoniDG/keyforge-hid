@@ -27,6 +27,21 @@ var ErrNoRecognizedDevice = errors.New("hid: no recognized device connected")
 // enumerated.
 var ErrNoVendorInterface = errors.New("hid: recognized device has no vendor interface")
 
+// ErrSeizeNotImplemented is returned (wrapped) by Stream on a Source built
+// with WithSeize(true) when the current platform's seize implementation is
+// still a stub. Callers can branch on it with errors.Is and retry with a
+// shared-mode Source instead of treating it as a device failure.
+var ErrSeizeNotImplemented = device.ErrSeizeNotImplemented
+
+// SeizeSupport reports whether the current build accepts WithSeize(true)
+// (Stream does not fail with ErrSeizeNotImplemented) and a one-line
+// description of the platform's seize status, suitable for logs or UI.
+// note is never empty.
+func SeizeSupport() (supported bool, note string) {
+	s := device.PlatformSeizeSupport()
+	return s.Supported, s.Note
+}
+
 // Device identifies the recognized keypad a Source streams from. ID is
 // the protocol.DeviceID every InputEvent delivered by Stream carries, so
 // callers can build bindings keyed on it before streaming starts.
