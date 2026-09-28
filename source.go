@@ -92,7 +92,7 @@ func New(opts ...Option) *Source {
 		opener:     device.NewOpener(),
 		setSeize:   device.SetSeize,
 		openVendor: func(path string, limits vendor.Limits) (slotApplier, error) {
-			return vendor.Open(path, limits)
+			return vendor.Open(path, limits, device.OpenPath)
 		},
 	}
 	for _, opt := range opts {

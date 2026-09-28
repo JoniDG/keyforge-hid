@@ -55,10 +55,16 @@ func (f *fakeDarwinHIDAPI) OpenPath(_ string) (hidDevice, error) {
 
 func newOpenerFromFake(f *fakeDarwinHIDAPI, seize bool) *hidOpener {
 	return &hidOpener{
-		init:          f.Init,
-		seize:         func() bool { return seize },
-		applyOpenMode: f.SetOpenExclusive,
-		openPath:      f.OpenPath,
+		mode:     openMode{init: f.Init, seize: func() bool { return seize }, applyOpenMode: f.SetOpenExclusive},
+		openPath: f.OpenPath,
+	}
+}
+
+func sharedNoopMode() openMode {
+	return openMode{
+		init:          func() error { return nil },
+		seize:         func() bool { return false },
+		applyOpenMode: func(bool) {},
 	}
 }
 
@@ -66,10 +72,8 @@ func TestOpener_Open_WhenPathOpens_ShouldReturnUsableStream(t *testing.T) {
 	t.Parallel()
 	fakeDev := &fakeHIDDevice{}
 	o := &hidOpener{
-		init:          func() error { return nil },
-		seize:         func() bool { return false },
-		applyOpenMode: func(bool) {},
-		openPath:      func(_ string) (hidDevice, error) { return fakeDev, nil },
+		mode:     sharedNoopMode(),
+		openPath: func(_ string) (hidDevice, error) { return fakeDev, nil },
 	}
 
 	stream, err := o.Open("/dev/hidraw0")
@@ -84,10 +88,8 @@ func TestOpener_Open_WhenPathFails_ShouldWrapErrOpen(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("hidapi: path not found")
 	o := &hidOpener{
-		init:          func() error { return nil },
-		seize:         func() bool { return false },
-		applyOpenMode: func(bool) {},
-		openPath:      func(_ string) (hidDevice, error) { return nil, cause },
+		mode:     sharedNoopMode(),
+		openPath: func(_ string) (hidDevice, error) { return nil, cause },
 	}
 
 	stream, err := o.Open("missing")
@@ -103,9 +105,11 @@ func TestOpener_Open_WhenInitFails_ShouldWrapErrInitWithoutOpening(t *testing.T)
 	cause := errors.New("hidapi: manager unavailable")
 	applied, opened := false, false
 	o := &hidOpener{
-		init:          func() error { return cause },
-		seize:         func() bool { return false },
-		applyOpenMode: func(bool) { applied = true },
+		mode: openMode{
+			init:          func() error { return cause },
+			seize:         func() bool { return false },
+			applyOpenMode: func(bool) { applied = true },
+		},
 		openPath: func(_ string) (hidDevice, error) {
 			opened = true
 			return &fakeHIDDevice{}, nil
@@ -158,6 +162,16 @@ func TestOpener_Open_WhenSeizeRequested_ShouldOpenExclusive(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []bool{true}, f.openedWith)
+}
+
+func TestOpenPath_WhenRealPathDoesNotExist_ShouldWrapErrOpen(t *testing.T) {
+	t.Parallel()
+
+	dev, err := OpenPath("keyforge-nonexistent-hid-path")
+
+	require.Error(t, err)
+	assert.Nil(t, dev)
+	assert.ErrorIs(t, err, ErrOpen)
 }
 
 func TestNewOpener_ShouldReturnNonNilImpl(t *testing.T) {

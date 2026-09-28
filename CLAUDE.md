@@ -63,6 +63,7 @@ make probe    # corre cmd/probe (detecta y prints eventos)
 - Escribir slots es persistente en el device: cualquier cambio de mapeo tiene que poder revertirse escribiendo los valores de fábrica slot por slot.
 - El cliente solo acepta índices dentro de los rangos verificados (`KnownDevice.Vendor.Slots`/`LEDs`) y solo trabaja sobre la capa 0 (las demás capas no están probadas). El firmware hace ack de cualquier índice, así que el límite lo pone el driver.
 - Un ack solo cuenta si además repite el payload enviado, para que un ack tardío de un comando anterior no se tome como confirmación.
+- `vendor.Open` recibe la función de apertura; el wiring le pasa siempre `device.OpenPath`. **Regla dura:** ninguna apertura de hidapi fuera de `internal/device` llama a `hid.OpenPath` directo. `device.OpenPath` abre bajo el mismo lock que la enumeración y con el modo de `SetSeize`; un `hid.OpenPath` suelto puede correr el `hid_init` implícito de hidapi, que en macOS resetea el modo a seize. La interface vendor (FF00) no es un teclado: en macOS abre sin `sudo` tanto en seize como en shared, así que `Provision` hereda el modo del proceso sin problema.
 
 ## Reglas duras
 
