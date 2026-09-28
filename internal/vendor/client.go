@@ -88,9 +88,11 @@ type Client struct {
 }
 
 // Open opens the vendor interface at the given platform path (the Path
-// of the Info whose UsagePage is 0xFF00).
-func Open(path string, limits Limits) (*Client, error) {
-	return open(path, limits, func(p string) (transport, error) { return hid.OpenPath(p) })
+// of the Info whose UsagePage is 0xFF00) with openPath. Pass
+// device.OpenPath: it serializes the open with the rest of the
+// process's hidapi use, which this package cannot import.
+func Open(path string, limits Limits, openPath func(string) (*hid.Device, error)) (*Client, error) {
+	return open(path, limits, func(p string) (transport, error) { return openPath(p) })
 }
 
 func open(path string, limits Limits, openPath func(string) (transport, error)) (*Client, error) {

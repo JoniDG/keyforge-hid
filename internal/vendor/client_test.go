@@ -135,13 +135,20 @@ func TestOpen_WhenPathFails_ShouldWrapErrOpen(t *testing.T) {
 	assert.ErrorIs(t, err, cause)
 }
 
-func TestOpen_WhenRealPathDoesNotExist_ShouldWrapErrOpen(t *testing.T) {
+func TestOpen_WhenOpenPathFails_ShouldForwardPathAndWrapErrOpen(t *testing.T) {
 	t.Parallel()
+	cause := errors.New("hidapi: path not found")
+	var gotPath string
 
-	c, err := Open("keyforge-nonexistent-vendor-path", testLimits)
+	c, err := Open("DevSrvsID:1", testLimits, func(p string) (*hid.Device, error) {
+		gotPath = p
+		return nil, cause
+	})
 
 	assert.Nil(t, c)
 	assert.ErrorIs(t, err, ErrOpen)
+	assert.ErrorIs(t, err, cause)
+	assert.Equal(t, "DevSrvsID:1", gotPath)
 }
 
 func TestClient_Close_WhenTransportFails_ShouldWrapErrClose(t *testing.T) {

@@ -299,7 +299,7 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 	if !ok {
 		return fmt.Errorf("probe: %s exposes no vendor interface", target.Known.Name)
 	}
-	client, err := vendor.Open(iface.Path, vendor.Limits{Slots: target.Known.Vendor.Slots, LEDs: target.Known.Vendor.LEDs})
+	client, err := vendor.Open(iface.Path, vendor.Limits{Slots: target.Known.Vendor.Slots, LEDs: target.Known.Vendor.LEDs}, device.OpenPath)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}

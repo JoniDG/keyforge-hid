@@ -351,8 +351,11 @@ Tested against macOS Sequoia (15.x) and macOS 27.
   and `hid_open_path` runs `hid_init` itself. A flag set before an
   enumeration (which inits and exits) is therefore lost by the time
   the device opens. `device.SetSeize` only records the requested mode;
-  the opener applies it after an explicit `hid.Init`, right before
-  `hid.OpenPath`, under a lock shared with the enumerator.
+  `device.OpenPath` (used by the input opener and the vendor client)
+  applies it after an explicit `hid.Init`, right before
+  `hid.OpenPath`, under a lock shared with the enumerator. The vendor
+  interface (`0xFF00`) is not a keyboard TLC, so it opens without
+  `sudo` in either mode.
 
 - **The option decides OS routing**. With a shared open, KeyForge
   receives every report and the OS keeps delivering the keystrokes to

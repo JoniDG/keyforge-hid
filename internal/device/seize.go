@@ -28,7 +28,7 @@ type SeizeSupport struct {
 var ErrSeizeNotImplemented = errors.New("device: seize not implemented on this platform")
 
 // hidapiMu serializes hidapi's lifecycle calls (Init/Exit in the
-// enumerator) with device opens. On darwin, hid_exit drops the HID
+// enumerator) with every device open, input and vendor alike. On darwin, hid_exit drops the HID
 // manager and the next hid_init resets the process-wide open mode to
 // seize, so an Exit landing between applying the mode and OpenPath
 // would silently turn a shared open into a seize. OpenPath cannot be
