@@ -21,7 +21,7 @@ Capa de hardware: enumera dispositivos HID conectados, los identifica por VID/PI
 - `github.com/karalabe/hid` (HID cross-platform) — a evaluar `github.com/sstallion/go-hid` como alternativa cuando arranquemos.
 - testify (tests)
 - mockery v2 (mocks)
-- golangci-lint
+- golangci-lint, siempre la **última release** (decisión del owner): CI usa `version: latest` y `make lint` compara la instalada con la última de GitHub (sin red avisa y corre igual). Un salto de versión mayor (v3) puede romper CI hasta migrar `.golangci.yml` y, probablemente, subir también `golangci-lint-action`.
 
 ## Layout
 ```
@@ -51,7 +51,8 @@ Los seams (`enumerator`/`identifier`/`opener`/`setSeize`) son inyectables vía f
 make build    # compila cmd/probe
 make test     # unit tests con coverage
 make cover    # reporte HTML de coverage
-make lint     # golangci-lint
+make lint     # golangci-lint (falla si la instalada no es la última release, la que usa CI)
+make lint-install  # instala la última release de golangci-lint en $(go env GOPATH)/bin
 make probe    # corre cmd/probe (detecta y prints eventos)
 ```
 

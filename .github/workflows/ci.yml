@@ -48,6 +48,8 @@ jobs:
           cache: true
       - name: Install hidapi build deps
         run: sudo apt-get update && sudo apt-get install -y libhidapi-dev libudev-dev
+      # Always the latest release; `make lint` fails locally when the installed
+      # one falls behind it, so both run the same version.
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.1
+          version: latest
