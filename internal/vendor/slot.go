@@ -28,7 +28,7 @@ func KeyboardSlot(mods, usage byte) Slot {
 
 // ConsumerSlot emits a Consumer Control usage (volume, media keys, …).
 func ConsumerSlot(usage uint16) Slot {
-	return Slot{Type: SlotConsumer, Codes: [3]byte{byte(usage), byte(usage >> 8), 0}}
+	return Slot{Type: SlotConsumer, Codes: [3]byte{byte(usage), byte(usage >> 8), 0}} // #nosec G115 -- little-endian split of a 16-bit usage
 }
 
 // DisabledSlot makes the input emit nothing.

@@ -117,7 +117,7 @@ func (c *Client) ReadSlots(ctx context.Context) ([]Slot, error) {
 	data := make([]byte, 0, size)
 	for off := 0; off < size; off += slotChunkSize {
 		reply, err := c.exchange(ctx, ackReadSlots, readEchoLen,
-			cmdReadSlots, lenReadSlots, byte(off), byte(off>>8), 0x00, layer)
+			cmdReadSlots, lenReadSlots, byte(off), byte(off>>8), 0x00, layer) // #nosec G115 -- little-endian split; limits.Slots comes from the curated KnownDevice (22), so off <= 88
 		if err != nil {
 			return nil, fmt.Errorf("vendor.ReadSlots: %w", err)
 		}
@@ -139,7 +139,7 @@ func (c *Client) WriteSlot(ctx context.Context, index int, s Slot) error {
 		return fmt.Errorf("vendor.WriteSlot (index %d, limit %d): %w", index, c.limits.Slots, ErrInvalidArgument)
 	}
 	off := index * slotSize
-	payload := []byte{cmdWriteSlot, lenWriteSlot, byte(off), byte(off >> 8), 0x00, layer, 0x00,
+	payload := []byte{cmdWriteSlot, lenWriteSlot, byte(off), byte(off >> 8), 0x00, layer, 0x00, // #nosec G115 -- little-endian split; limits.Slots comes from the curated KnownDevice (22), so off <= 88
 		byte(s.Type), s.Codes[0], s.Codes[1], s.Codes[2]}
 	if _, err := c.exchange(ctx, cmdWriteSlot, len(payload)-2, payload...); err != nil {
 		return fmt.Errorf("vendor.WriteSlot: %w", err)
@@ -192,7 +192,7 @@ func (c *Client) SetKeyColor(ctx context.Context, led int, color RGB) error {
 	if led < 0 || led >= c.limits.LEDs {
 		return fmt.Errorf("vendor.SetKeyColor (led %d, limit %d): %w", led, c.limits.LEDs, ErrInvalidArgument)
 	}
-	payload := []byte{cmdSetKeyColor, lenSetKeyColor, byte(led * 3), 0x00, 0x00, 0x00, 0x00,
+	payload := []byte{cmdSetKeyColor, lenSetKeyColor, byte(led * 3), 0x00, 0x00, 0x00, 0x00, // #nosec G115 -- led < limits.LEDs, which comes from the curated KnownDevice (10), so led*3 fits a byte
 		color.R, color.G, color.B}
 	if _, err := c.exchange(ctx, cmdSetKeyColor, len(payload)-2, payload...); err != nil {
 		return fmt.Errorf("vendor.SetKeyColor: %w", err)
