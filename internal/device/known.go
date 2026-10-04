@@ -64,6 +64,9 @@ type VendorInterface struct {
 	// LEDs lists the ids (from Controls) of the inputs with an
 	// addressable LED, indexed by LED number.
 	LEDs []string
+	// Gamma is the exponent vendor.RGB.Corrected applies to colors
+	// before they reach the LEDs; 0 writes them unchanged.
+	Gamma float64
 	// Layout is what Source.Provision writes (one entry per slot) so
 	// every physical input emits a distinct code matching Controls.
 	Layout []vendor.Slot
@@ -133,6 +136,9 @@ var SideKeyboardKeypad = KnownDevice{
 			"key_0x68", "key_0x69", "key_0x6a", "key_0x6b", "key_0x6c",
 			"key_0x6d", "key_0x6e", "key_0x6f", "key_0x70", "key_0x71",
 		},
+		// Measured by eye against a screen on the reference keypad: 2.8
+		// still washed pastels out and 4.5 overshot (§4.3).
+		Gamma: 3.5,
 		Layout: sideKeyboardSlots(
 			[10]vendor.Slot{
 				vendor.KeyboardSlot(0, 0x68), vendor.KeyboardSlot(0, 0x69), // F13, F14

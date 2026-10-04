@@ -1,5 +1,7 @@
 package vendor
 
+import "math"
+
 // Style selects the keypad's lighting effect.
 type Style byte
 
@@ -21,6 +23,27 @@ type HSV struct {
 // RGB is a per-key color.
 type RGB struct {
 	R, G, B byte
+}
+
+// Corrected reshapes c for LEDs whose brightness is linear in the channel
+// value, unlike the gamma-encoded '#RRGGBB' a screen shows. Each channel
+// becomes peak·(channel/peak)^gamma, where peak is the brightest channel:
+// peak keeps its value, so the brightness picked is preserved, while the
+// weaker channels drop so they stop washing the hue out toward white. A
+// channel that was on never rounds down to off. Grays and pure primaries
+// are unchanged, and gamma <= 0 returns c as is.
+func (c RGB) Corrected(gamma float64) RGB {
+	peak := max(c.R, c.G, c.B)
+	if gamma <= 0 || peak == 0 {
+		return c
+	}
+	channel := func(v byte) byte {
+		if v == 0 {
+			return 0
+		}
+		return byte(max(1, math.Round(float64(peak)*math.Pow(float64(v)/float64(peak), gamma))))
+	}
+	return RGB{R: channel(c.R), G: channel(c.G), B: channel(c.B)}
 }
 
 // Effect is the keypad-wide lighting configuration. The firmware

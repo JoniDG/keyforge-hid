@@ -303,6 +303,38 @@ in `KnownDevice.Vendor.LEDs` (`key_0x68` → LED 0 … `key_0x71` → LED 9);
 `Source.PaintInputs` writes the colors with 0x14 and then sets style
 `05`, since the colors do not show under any other effect.
 
+#### Color response (measured)
+
+The LEDs render each channel linearly: a value of `80` drives the LED
+at about half its brightness. A screen `#RRGGBB` is gamma-encoded
+instead (`80` is about 22% of the light), so writing screen colors
+as is makes the weaker channels of a mix far too strong and washes it
+out toward white. Measured by eye on the reference keypad, comparing
+against the same colors on a screen:
+
+| Test                                            | Seen on the LEDs                                  |
+| ----------------------------------------------- | ------------------------------------------------- |
+| Primaries, secondaries, white, `#808080`        | Correct; white has no tint                        |
+| Green ramp `ff` → `01` (halving), `00`          | All 9 distinguishable (`01` faint), `00` off      |
+| Red → yellow → green sweep at full intensity    | Every step distinguishable                        |
+| `#80ff80`, `#c0ffc0`                            | White, not light green                            |
+| Pastels/greens with gamma 2.2 / 2.8 / 3.5 / 4.5 | Closer to the screen up to 3.5; 4.5 overshoots    |
+| `#00a3d7`, `#4d22b3` with plain gamma 3.5       | Too dim; worse than uncorrected                   |
+| Same, keeping the brightest channel             | Closest to the screen                             |
+
+No channel dominates and there is no threshold, so neither per-channel
+scaling nor a lookup table is needed. `Source.PaintInputs` corrects
+each color with `vendor.RGB.Corrected` and the device's
+`KnownDevice.Vendor.Gamma` (3.5 for this keypad): every channel becomes
+`peak × (channel / peak)^γ`, where `peak` is the brightest channel.
+`peak` keeps its value, so the chosen brightness is preserved, and a
+channel that was on is floored at `01` so a dark color never turns off.
+Grays, white and pure primaries are unchanged. Examples: `#80ff80` →
+`#17ff17`, `#4caf50` → `#09af0b`, `#ff8000` → `#ff1700` (still reads
+as orange). Very light tints such as `#c0ffc0` still look white: an RGB
+LED can't separate them from white. `probe -vendor-color` writes raw
+values (for measuring); `probe -paint` goes through the correction.
+
 Verified end to end: writing `20 00 68 00` (F13) to slot 0 made
 row 1 key 1 emit `key_0x68` while the other keys kept emitting
 `Ctrl+A`; writing F14/F15/F16 to slots 19/20/21 made encoder 2 emit

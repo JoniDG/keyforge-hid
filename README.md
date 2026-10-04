@@ -119,7 +119,9 @@ times out, so pass a short deadline if the keypad may not answer;
 `PaintInputs` sets the LED color of the inputs the catalog flags `rgb`
 (input id → `#RRGGBB`, `#000000` = off) and switches the keypad to the per-key
 lighting effect, rejecting unknown or LED-less inputs with `ErrInputNotRGB`
-before writing anything;
+before writing anything (colors are gamma-corrected for the device's LEDs so
+they look closer to the screen; see
+[the device doc](docs/hid-device-keyforge-keypad.md#color-response-measured));
 `Stream` blocks delivering
 decoded `protocol.InputEvent` values until the context is cancelled, the sink
 returns an error, or a reader fails.
