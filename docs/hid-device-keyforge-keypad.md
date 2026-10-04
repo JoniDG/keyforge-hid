@@ -126,7 +126,7 @@ their platform path (on macOS, a stable per-session `DevSrvsID:N`):
 | --------- | ----------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | 0         | `DevSrvsID:4295184749`  | `0001:0006` (keyboard alt), `0001:0001/02/0c/80`, `000c:0001` (CC)   | Multi-TLC. KeyForge reads it for **encoder** Consumer Control.   |
 | 1         | `DevSrvsID:4295184751`  | `0001:0006` (boot keyboard)                                          | KeyForge reads it for the **10 physical keys** (boot protocol).  |
-| 2         | `DevSrvsID:4295184750`  | `0xFF00:0x0002` (vendor-specific)                                    | Vendor protocol — RGB + on-device input remapping (§4.3). Opened by `Source.Provision` and probe's vendor mode, never by `Stream`. |
+| 2         | `DevSrvsID:4295184750`  | `0xFF00:0x0002` (vendor-specific)                                    | Vendor protocol — RGB + on-device input remapping (§4.3). Opened by `Source.Provision`, `Source.PaintInputs` and probe's vendor mode, never by `Stream`. |
 
 Several observations that matter when writing code that opens this
 device:
@@ -298,7 +298,10 @@ exercised.
 | 22–27 | —                        | `13 00 00 00` (disabled) |
 
 LED indices use the same numbering as key slots 0–9. The encoders have
-no LEDs.
+no LEDs. The catalog flags the ten keys `rgb` and maps input id to LED
+in `KnownDevice.Vendor.LEDs` (`key_0x68` → LED 0 … `key_0x71` → LED 9);
+`Source.PaintInputs` writes the colors with 0x14 and then sets style
+`05`, since the colors do not show under any other effect.
 
 Verified end to end: writing `20 00 68 00` (F13) to slot 0 made
 row 1 key 1 emit `key_0x68` while the other keys kept emitting
@@ -422,6 +425,7 @@ sudo ./bin/probe -stream -events
 # No sudo needed on macOS: this interface is not a keyboard.
 ./bin/probe -vendor-slots               # dump the input slots (layer 0)
 ./bin/probe -vendor-color 0:00ff00      # key 1 green (switches to user light)
+./bin/probe -paint 'key_0x68=#00ff00'   # same, by input id through Source.PaintInputs
 ./bin/probe -vendor-effect spectrum     # back to the factory rainbow
 ./bin/probe -provision -vendor-slots    # write the KeyForge layout (§2.1) and show it
 ./bin/probe -factory-layout             # undo it: every key back to Ctrl+A
@@ -456,8 +460,11 @@ or layout.
 - **OS side effects of F13–F22.** Without seize, some provisioned keys
   also trigger system actions (see §2.1). Accepted trade-off; the
   daemon should seize a provisioned keypad.
-- **RGB.** `internal/vendor` can set effects and per-key colors, but
-  the public API does not expose them yet.
+- **RGB.** `Source.PaintInputs` only sets per-key colors under the
+  user light effect; the other effects (breath, spectrum, …) are only
+  reachable through probe. The colors persist on the device, so after a
+  re-plug the keypad shows the last ones written until KeyForge paints
+  again.
 - **Key layers.** The firmware supports multiple key layers
   (`layer` byte in §4.3); only layer `0` has been exercised.
 - **`device_id` Serial stability.** `Info.Serial` is empty during

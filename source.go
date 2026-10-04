@@ -8,8 +8,10 @@ package hid
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/JoniDG/keyforge-hid/internal/device"
 	"github.com/JoniDG/keyforge-hid/internal/events"
@@ -26,6 +28,23 @@ var ErrNoRecognizedDevice = errors.New("hid: no recognized device connected")
 // device has no vendor interface KeyForge can configure, or it was not
 // enumerated.
 var ErrNoVendorInterface = errors.New("hid: recognized device has no vendor interface")
+
+// ErrInputNotRGB is returned (wrapped) by PaintInputs when a requested
+// input id is not in the device's catalog or has no LED.
+var ErrInputNotRGB = errors.New("hid: input has no LED")
+
+// ErrInvalidColor is returned (wrapped) by PaintInputs when a color is
+// not a '#RRGGBB' hex string.
+var ErrInvalidColor = errors.New("hid: invalid color")
+
+// Failures talking to the vendor interface, returned wrapped by Provision
+// and PaintInputs so callers can tell them apart with errors.Is.
+var (
+	ErrVendorOpen  = vendor.ErrOpen
+	ErrVendorWrite = vendor.ErrWrite
+	ErrVendorRead  = vendor.ErrRead
+	ErrVendorNoAck = vendor.ErrNoAck
+)
 
 // ErrSeizeNotImplemented is returned (wrapped) by Stream on a Source built
 // with WithSeize(true) when the current platform's seize implementation is
@@ -57,13 +76,20 @@ type Source struct {
 	identifier device.Identifier
 	opener     device.Opener
 	setSeize   func(enabled bool) error
-	openVendor func(path string, limits vendor.Limits) (slotApplier, error)
-	seize      bool
+	openVendor func(path string, limits vendor.Limits) (vendorClient, error)
+	// vendorSem holds one token while Provision or PaintInputs talk to
+	// the vendor interface: a command and its ack must not interleave
+	// with another one.
+	vendorSem chan struct{}
+	seize     bool
 }
 
-// slotApplier is the part of *vendor.Client that Provision needs.
-type slotApplier interface {
+// vendorClient is the part of *vendor.Client that Provision and
+// PaintInputs need.
+type vendorClient interface {
 	ApplySlots(ctx context.Context, want []vendor.Slot) (int, error)
+	SetKeyColor(ctx context.Context, led int, color vendor.RGB) error
+	SetEffect(ctx context.Context, e vendor.Effect) error
 	Close() error
 }
 
@@ -91,9 +117,10 @@ func New(opts ...Option) *Source {
 		identifier: device.NewIdentifier(device.DefaultRegistry()),
 		opener:     device.NewOpener(),
 		setSeize:   device.SetSeize,
-		openVendor: func(path string, limits vendor.Limits) (slotApplier, error) {
+		openVendor: func(path string, limits vendor.Limits) (vendorClient, error) {
 			return vendor.Open(path, limits, device.OpenPath)
 		},
+		vendorSem: make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -172,34 +199,154 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 // Provision opens the vendor interface, which is separate from the ones
 // Stream reads. On the reference keypad under macOS it needs no elevated
 // privileges and works while Stream is running; other platforms are not
-// verified yet.
+// verified yet. Calls to Provision and PaintInputs on the same Source run
+// one at a time.
 //
 // ctx bounds the whole call: once it is cancelled or its deadline passes,
 // Provision stops talking to the keypad, closes the vendor interface and
 // returns ctx.Err() wrapped, so errors.Is(err, context.DeadlineExceeded)
-// holds. Cancellation is checked between commands and while waiting for
-// each ack; a write or open blocked inside hidapi cannot be interrupted,
-// so ctx is honored only once that call returns.
+// holds. Cancellation is checked while waiting for another vendor call,
+// between commands and while waiting for each ack; a write or open
+// blocked inside hidapi cannot be interrupted, so ctx is honored only
+// once that call returns.
 func (s *Source) Provision(ctx context.Context) error {
-	r, err := s.resolve(ctx)
+	r, path, err := s.resolveVendor(ctx)
 	if err != nil {
 		return err
 	}
-	iface, ok := r.target.VendorInfo()
-	if !ok {
-		return ErrNoVendorInterface
-	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("hid.Provision: %w", err)
+	spec := r.target.Known.Vendor
+	return s.withVendor(ctx, "hid.Provision", path, spec, func(c vendorClient) error {
+		_, err := c.ApplySlots(ctx, spec.Layout)
+		return err
+	})
+}
+
+// userLightEffect is the effect under which the per-key colors show.
+// Speed is irrelevant to it; 2 matches the vendor configurator's default.
+var userLightEffect = vendor.Effect{Style: vendor.StyleUserLight, Speed: 2}
+
+// PaintInputs sets the LED of exactly the inputs in colors (input id →
+// '#RRGGBB', any case; '#000000' turns the LED off) on the recognized
+// keypad and switches it to the per-key lighting effect those colors
+// need. Inputs left out keep whatever color they had.
+//
+// Every entry is checked before anything is written: an id that is not
+// in the catalog DiscoverDevice reports, or whose input has no LED
+// (Input.Rgb unset), fails with ErrInputNotRGB, and a malformed color
+// with ErrInvalidColor. It returns ErrNoRecognizedDevice and
+// ErrNoVendorInterface like Provision, and wraps vendor failures so
+// errors.Is matches ErrVendorOpen, ErrVendorWrite, ErrVendorRead or
+// ErrVendorNoAck.
+//
+// Colors are written first and the effect last. On any error after the
+// first write, cancellation included, some LEDs may already show their
+// new color; calling PaintInputs again converges. Like Provision, it
+// works while Stream is running, runs one at a time with Provision on the
+// same Source, and honors ctx between commands and while waiting for
+// each ack (up to 500 ms per command).
+func (s *Source) PaintInputs(ctx context.Context, colors map[string]protocol.Color) error {
+	r, path, err := s.resolveVendor(ctx)
+	if err != nil {
+		return err
 	}
 	spec := r.target.Known.Vendor
-	client, err := s.openVendor(iface.Path, vendor.Limits{Slots: spec.Slots, LEDs: spec.LEDs})
+	paints, err := ledPaints(spec.LEDs, colors)
 	if err != nil {
-		return fmt.Errorf("hid.Provision: %w", err)
+		return fmt.Errorf("hid.PaintInputs: %w", err)
 	}
-	_, applyErr := client.ApplySlots(ctx, spec.Layout)
-	if err := errors.Join(applyErr, client.Close()); err != nil {
-		return fmt.Errorf("hid.Provision: %w", err)
+	return s.withVendor(ctx, "hid.PaintInputs", path, spec, func(c vendorClient) error {
+		for _, p := range paints {
+			if err := c.SetKeyColor(ctx, p.led, p.color); err != nil {
+				return err
+			}
+		}
+		return c.SetEffect(ctx, userLightEffect)
+	})
+}
+
+type ledPaint struct {
+	led   int
+	color vendor.RGB
+}
+
+// ledPaints validates colors against the device's LED map and returns
+// them in LED order, so the writes are deterministic.
+func ledPaints(leds []string, colors map[string]protocol.Color) ([]ledPaint, error) {
+	index := make(map[string]int, len(leds))
+	for i, id := range leds {
+		index[id] = i
+	}
+	// Sorted so the first invalid entry reported does not depend on map
+	// iteration order.
+	ids := make([]string, 0, len(colors))
+	for id := range colors {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	paints := make([]ledPaint, 0, len(colors))
+	for _, id := range ids {
+		led, ok := index[id]
+		if !ok {
+			return nil, fmt.Errorf("input %q: %w", id, ErrInputNotRGB)
+		}
+		rgb, err := parseColor(colors[id])
+		if err != nil {
+			return nil, fmt.Errorf("input %q: %w", id, err)
+		}
+		paints = append(paints, ledPaint{led: led, color: rgb})
+	}
+	sort.Slice(paints, func(i, j int) bool { return paints[i].led < paints[j].led })
+	return paints, nil
+}
+
+// parseColor decodes a '#RRGGBB' protocol.Color in either case.
+func parseColor(c protocol.Color) (vendor.RGB, error) {
+	s := string(c)
+	if len(s) != 7 || s[0] != '#' {
+		return vendor.RGB{}, fmt.Errorf("%q: %w", s, ErrInvalidColor)
+	}
+	b, err := hex.DecodeString(s[1:])
+	if err != nil {
+		return vendor.RGB{}, fmt.Errorf("%q: %w", s, ErrInvalidColor)
+	}
+	return vendor.RGB{R: b[0], G: b[1], B: b[2]}, nil
+}
+
+// resolveVendor resolves the recognized device and the path of its
+// vendor interface.
+func (s *Source) resolveVendor(ctx context.Context) (resolved, string, error) {
+	r, err := s.resolve(ctx)
+	if err != nil {
+		return resolved{}, "", err
+	}
+	iface, ok := r.target.VendorInfo()
+	if !ok {
+		return resolved{}, "", ErrNoVendorInterface
+	}
+	return r, iface.Path, nil
+}
+
+// withVendor runs fn over the vendor interface at path, holding vendorSem
+// for the whole session and closing the interface afterwards. Errors are
+// wrapped with op.
+func (s *Source) withVendor(ctx context.Context, op, path string, spec device.VendorInterface, fn func(vendorClient) error) error {
+	// Checked up front because select picks at random when both cases
+	// are ready; a ctx that ends while waiting is caught by select.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	select {
+	case s.vendorSem <- struct{}{}:
+	case <-ctx.Done():
+		return fmt.Errorf("%s: %w", op, ctx.Err())
+	}
+	defer func() { <-s.vendorSem }()
+	client, err := s.openVendor(path, vendor.Limits{Slots: spec.Slots, LEDs: len(spec.LEDs)})
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if err := errors.Join(fn(client), client.Close()); err != nil {
+		return fmt.Errorf("%s: %w", op, err)
 	}
 	return nil
 }

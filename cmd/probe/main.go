@@ -11,6 +11,9 @@
 // interface — hex dump by default, JSON events with -events. Useful
 // for debugging unrecognized layouts.
 //
+// Paint mode (-paint) sets input LEDs through hid.Source.PaintInputs,
+// the same call keyforge-core uses.
+//
 // Vendor mode (-vendor-slots, -vendor-effect, -vendor-color,
 // -provision, -factory-layout) talks to the recognized device's
 // vendor-specific interface instead: it reads or rewrites the input
@@ -41,6 +44,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	hid "github.com/JoniDG/keyforge-hid"
 	"github.com/JoniDG/keyforge-hid/internal/device"
 	"github.com/JoniDG/keyforge-hid/internal/events"
 	"github.com/JoniDG/keyforge-hid/internal/vendor"
@@ -66,6 +70,7 @@ func run(args []string) error {
 	vendorColor := fs.String("vendor-color", "", "set one key LED as LED:RRGGBB (switches the effect to user light first)")
 	provision := fs.Bool("provision", false, "write the KeyForge input layout so every key and encoder emits a distinct code")
 	factoryLayout := fs.Bool("factory-layout", false, "write the factory input layout back (undoes -provision)")
+	paint := fs.String("paint", "", "set input LEDs as ID=#RRGGBB[,ID=#RRGGBB...] (e.g. key_0x68=#ff0000) and switch to user light")
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -93,6 +98,12 @@ func run(args []string) error {
 	}
 	if *provision && *factoryLayout {
 		return errors.New("probe: -provision and -factory-layout are mutually exclusive")
+	}
+	if *paint != "" {
+		if vendorMode || *stream {
+			return errors.New("probe: -paint cannot be combined with -stream or -vendor-* flags")
+		}
+		return runPaint(*paint)
 	}
 	var lighting vendorLighting
 	if *vendorEffect != "" {
@@ -299,7 +310,7 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 	if !ok {
 		return fmt.Errorf("probe: %s exposes no vendor interface", target.Known.Name)
 	}
-	client, err := vendor.Open(iface.Path, vendor.Limits{Slots: target.Known.Vendor.Slots, LEDs: target.Known.Vendor.LEDs}, device.OpenPath)
+	client, err := vendor.Open(iface.Path, vendor.Limits{Slots: target.Known.Vendor.Slots, LEDs: len(target.Known.Vendor.LEDs)}, device.OpenPath)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -345,6 +356,24 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 			fmt.Printf("  %2d  %s\n", i, slot)
 		}
 	}
+	return nil
+}
+
+func runPaint(spec string) error {
+	colors := map[string]protocol.Color{}
+	for _, entry := range strings.Split(spec, ",") {
+		id, color, ok := strings.Cut(entry, "=")
+		if !ok || id == "" {
+			return fmt.Errorf("probe: invalid paint entry %q (want ID=#RRGGBB)", entry)
+		}
+		colors[id] = protocol.Color(color)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := hid.New().PaintInputs(ctx, colors); err != nil {
+		return fmt.Errorf("probe: %w", err)
+	}
+	fmt.Printf("painted %d input(s)\n", len(colors))
 	return nil
 }
 

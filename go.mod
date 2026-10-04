@@ -3,7 +3,7 @@ module github.com/JoniDG/keyforge-hid
 go 1.24
 
 require (
-	github.com/JoniDG/keyforge-protocol/go v0.3.0
+	github.com/JoniDG/keyforge-protocol/go v0.12.1
 	github.com/sstallion/go-hid v0.15.0
 	github.com/stretchr/testify v1.11.1
 )

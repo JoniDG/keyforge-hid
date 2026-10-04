@@ -81,7 +81,10 @@ func TestSideKeyboardKeypad_DeclaresVendorInterface(t *testing.T) {
 	assert.Equal(t, uint16(0xFF00), v.UsagePage)
 	assert.Equal(t, uint16(0x0002), v.Usage)
 	assert.Equal(t, 22, v.Slots)
-	assert.Equal(t, 10, v.LEDs)
+	assert.Equal(t, []string{
+		"key_0x68", "key_0x69", "key_0x6a", "key_0x6b", "key_0x6c",
+		"key_0x6d", "key_0x6e", "key_0x6f", "key_0x70", "key_0x71",
+	}, v.LEDs)
 	assert.Len(t, v.Layout, v.Slots)
 	assert.Len(t, v.Factory, v.Slots)
 }
@@ -125,19 +128,20 @@ func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
 		id    string
 		kind  protocol.InputKind
 		label string
+		rgb   bool
 	}{
-		{"key_0x68", protocol.InputKindKey, "Key 1"},
-		{"key_0x69", protocol.InputKindKey, "Key 2"},
-		{"key_0x6a", protocol.InputKindKey, "Key 3"},
-		{"key_0x6b", protocol.InputKindKey, "Key 4"},
-		{"key_0x6c", protocol.InputKindKey, "Key 5"},
-		{"key_0x6d", protocol.InputKindKey, "Key 6"},
-		{"key_0x6e", protocol.InputKindKey, "Key 7"},
-		{"key_0x6f", protocol.InputKindKey, "Key 8"},
-		{"key_0x70", protocol.InputKindKey, "Key 9"},
-		{"key_0x71", protocol.InputKindKey, "Key 10"},
-		{"encoder_0", protocol.InputKindEncoder, "Encoder 1"},
-		{"encoder_1", protocol.InputKindEncoder, "Encoder 2"},
+		{"key_0x68", protocol.InputKindKey, "Key 1", true},
+		{"key_0x69", protocol.InputKindKey, "Key 2", true},
+		{"key_0x6a", protocol.InputKindKey, "Key 3", true},
+		{"key_0x6b", protocol.InputKindKey, "Key 4", true},
+		{"key_0x6c", protocol.InputKindKey, "Key 5", true},
+		{"key_0x6d", protocol.InputKindKey, "Key 6", true},
+		{"key_0x6e", protocol.InputKindKey, "Key 7", true},
+		{"key_0x6f", protocol.InputKindKey, "Key 8", true},
+		{"key_0x70", protocol.InputKindKey, "Key 9", true},
+		{"key_0x71", protocol.InputKindKey, "Key 10", true},
+		{"encoder_0", protocol.InputKindEncoder, "Encoder 1", false},
+		{"encoder_1", protocol.InputKindEncoder, "Encoder 2", false},
 	}
 	require.Len(t, SideKeyboardKeypad.Controls, len(want))
 	for i, w := range want {
@@ -146,7 +150,38 @@ func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
 		assert.Equal(t, w.kind, got.Kind)
 		require.NotNil(t, got.Label)
 		assert.Equal(t, w.label, *got.Label)
+		if w.rgb {
+			require.NotNil(t, got.Rgb, "%s should be flagged rgb", w.id)
+			assert.True(t, *got.Rgb)
+		} else {
+			assert.Nil(t, got.Rgb, "%s has no LED", w.id)
+		}
 	}
+}
+
+// Vendor.LEDs and the rgb flags in Controls are two hand-written tables;
+// every RGB control must have exactly one LED and vice versa.
+func TestSideKeyboardKeypad_LEDs_ShouldMatchRGBControls(t *testing.T) {
+	t.Parallel()
+	var rgb []string
+	for _, c := range SideKeyboardKeypad.Controls {
+		if c.Rgb != nil && *c.Rgb {
+			rgb = append(rgb, c.Id)
+		}
+	}
+	assert.ElementsMatch(t, rgb, SideKeyboardKeypad.Vendor.LEDs)
+}
+
+func TestRGBKey_ShouldFlagKeyAsRGB(t *testing.T) {
+	t.Parallel()
+	got := rgbKey("key_0x68", "Key 1")
+
+	assert.Equal(t, "key_0x68", got.Id)
+	assert.Equal(t, protocol.InputKindKey, got.Kind)
+	require.NotNil(t, got.Label)
+	assert.Equal(t, "Key 1", *got.Label)
+	require.NotNil(t, got.Rgb)
+	assert.True(t, *got.Rgb)
 }
 
 func TestControl_ShouldSetLabelPointer(t *testing.T) {
