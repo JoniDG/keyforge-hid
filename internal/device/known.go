@@ -61,8 +61,9 @@ type VendorInterface struct {
 	// Slots is the total number of input slots wired to the device's
 	// physical inputs.
 	Slots int
-	// LEDs is the number of keys with an addressable LED.
-	LEDs int
+	// LEDs lists the ids (from Controls) of the inputs with an
+	// addressable LED, indexed by LED number.
+	LEDs []string
 	// Layout is what Source.Provision writes (one entry per slot) so
 	// every physical input emits a distinct code matching Controls.
 	Layout []vendor.Slot
@@ -74,6 +75,14 @@ type VendorInterface struct {
 // control builds a logical input catalog entry with a non-empty label.
 func control(id string, kind protocol.InputKind, label string) protocol.Input {
 	return protocol.Input{Id: id, Kind: kind, Label: &label}
+}
+
+// rgbKey builds a key catalog entry flagged as having an LED.
+func rgbKey(id, label string) protocol.Input {
+	in := control(id, protocol.InputKindKey, label)
+	rgb := true
+	in.Rgb = &rgb
+	return in
 }
 
 // SideKeyboardKeypad is the 10-key + 2-encoder keypad that ships under
@@ -100,27 +109,30 @@ var SideKeyboardKeypad = KnownDevice{
 		{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001},
 	},
 	Controls: []protocol.Input{
-		control("key_0x68", protocol.InputKindKey, "Key 1"),
-		control("key_0x69", protocol.InputKindKey, "Key 2"),
-		control("key_0x6a", protocol.InputKindKey, "Key 3"),
-		control("key_0x6b", protocol.InputKindKey, "Key 4"),
-		control("key_0x6c", protocol.InputKindKey, "Key 5"),
-		control("key_0x6d", protocol.InputKindKey, "Key 6"),
-		control("key_0x6e", protocol.InputKindKey, "Key 7"),
-		control("key_0x6f", protocol.InputKindKey, "Key 8"),
-		control("key_0x70", protocol.InputKindKey, "Key 9"),
-		control("key_0x71", protocol.InputKindKey, "Key 10"),
+		rgbKey("key_0x68", "Key 1"),
+		rgbKey("key_0x69", "Key 2"),
+		rgbKey("key_0x6a", "Key 3"),
+		rgbKey("key_0x6b", "Key 4"),
+		rgbKey("key_0x6c", "Key 5"),
+		rgbKey("key_0x6d", "Key 6"),
+		rgbKey("key_0x6e", "Key 7"),
+		rgbKey("key_0x6f", "Key 8"),
+		rgbKey("key_0x70", "Key 9"),
+		rgbKey("key_0x71", "Key 10"),
 		control("encoder_0", protocol.InputKindEncoder, "Encoder 1"),
 		control("encoder_1", protocol.InputKindEncoder, "Encoder 2"),
 	},
 	// Slots 0–21 back the ten keys and the two encoders' click/CW/CCW;
 	// the firmware answers for slots past 21 but nothing is wired to
-	// them. Only the ten keys have LEDs.
+	// them. Only the ten keys have LEDs, numbered like their slots.
 	Vendor: VendorInterface{
 		UsagePage: 0xFF00,
 		Usage:     0x0002,
 		Slots:     22,
-		LEDs:      10,
+		LEDs: []string{
+			"key_0x68", "key_0x69", "key_0x6a", "key_0x6b", "key_0x6c",
+			"key_0x6d", "key_0x6e", "key_0x6f", "key_0x70", "key_0x71",
+		},
 		Layout: sideKeyboardSlots(
 			[10]vendor.Slot{
 				vendor.KeyboardSlot(0, 0x68), vendor.KeyboardSlot(0, 0x69), // F13, F14

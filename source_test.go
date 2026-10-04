@@ -129,6 +129,7 @@ func newSource(enum device.Enumerator, opener device.Opener, opts ...Option) *So
 		identifier: device.NewIdentifier(device.DefaultRegistry()),
 		opener:     opener,
 		setSeize:   func(bool) error { return nil },
+		vendorSem:  make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -145,6 +146,7 @@ func TestNew_ShouldWireRealPipelineWithSeizeDisabledByDefault(t *testing.T) {
 	require.NotNil(t, s.setSeize)
 	require.NotNil(t, s.openVendor)
 	assert.False(t, s.seize)
+	assert.Equal(t, 1, cap(s.vendorSem))
 
 	_, err := s.openVendor("keyforge-nonexistent-vendor-path", vendor.Limits{})
 	assert.ErrorIs(t, err, vendor.ErrOpen)
@@ -441,51 +443,75 @@ func vendorInfo(path string) device.Info {
 	return device.Info{Path: path, VendorID: testVID, ProductID: testPID, UsagePage: 0xFF00, Usage: 0x0002}
 }
 
-// fakeApplier records what Provision asked the vendor client to do.
-type fakeApplier struct {
+// fakeVendor records, in order, what the vendor client was asked to do.
+type fakeVendor struct {
 	applied    []vendor.Slot
+	calls      []string
 	applyErr   error
+	colorErr   error
+	effectErr  error
 	closeErr   error
 	closeCalls int
-	// cancel, when set, simulates ctx being cancelled mid-apply: it is
-	// called and ApplySlots fails with ctx.Err() like the real client.
+	// cancel, when set, simulates ctx being cancelled mid-session: it is
+	// called on the first command, which then fails with ctx.Err() like
+	// the real client.
 	cancel context.CancelFunc
 }
 
-func (f *fakeApplier) ApplySlots(ctx context.Context, want []vendor.Slot) (int, error) {
+func (f *fakeVendor) cancelled(ctx context.Context) error {
+	if f.cancel == nil {
+		return nil
+	}
+	f.cancel()
+	return ctx.Err()
+}
+
+func (f *fakeVendor) ApplySlots(ctx context.Context, want []vendor.Slot) (int, error) {
 	f.applied = want
-	if f.cancel != nil {
-		f.cancel()
-		return 0, fmt.Errorf("vendor.ApplySlots: %w", ctx.Err())
+	if err := f.cancelled(ctx); err != nil {
+		return 0, fmt.Errorf("vendor.ApplySlots: %w", err)
 	}
 	return len(want), f.applyErr
 }
 
-func (f *fakeApplier) Close() error {
+func (f *fakeVendor) SetKeyColor(ctx context.Context, led int, c vendor.RGB) error {
+	f.calls = append(f.calls, fmt.Sprintf("color %d %02x%02x%02x", led, c.R, c.G, c.B))
+	if err := f.cancelled(ctx); err != nil {
+		return fmt.Errorf("vendor.SetKeyColor: %w", err)
+	}
+	return f.colorErr
+}
+
+func (f *fakeVendor) SetEffect(_ context.Context, e vendor.Effect) error {
+	f.calls = append(f.calls, fmt.Sprintf("effect %02x", byte(e.Style)))
+	return f.effectErr
+}
+
+func (f *fakeVendor) Close() error {
 	f.closeCalls++
 	return f.closeErr
 }
 
 // provisionSource builds a Source over the given enumeration whose vendor
-// seam hands out applier and records the path and limits it was opened
+// seam hands out client and records the path and limits it was opened
 // with.
-func provisionSource(infos []device.Info, applier *fakeApplier, openErr error) (*Source, *string, *vendor.Limits) {
+func provisionSource(infos []device.Info, client *fakeVendor, openErr error) (*Source, *string, *vendor.Limits) {
 	s := newSource(fakeEnumerator{infos: infos}, &stubOpener{})
 	var gotPath string
 	var gotLimits vendor.Limits
-	s.openVendor = func(path string, limits vendor.Limits) (slotApplier, error) {
+	s.openVendor = func(path string, limits vendor.Limits) (vendorClient, error) {
 		gotPath, gotLimits = path, limits
 		if openErr != nil {
 			return nil, openErr
 		}
-		return applier, nil
+		return client, nil
 	}
 	return s, &gotPath, &gotLimits
 }
 
 func TestProvision_WhenVendorInterfaceEnumerated_ShouldApplyKeyForgeLayout(t *testing.T) {
 	t.Parallel()
-	applier := &fakeApplier{}
+	applier := &fakeVendor{}
 	s, path, limits := provisionSource([]device.Info{keyboardInfo("kb", ""), vendorInfo("vendor")}, applier, nil)
 
 	err := s.Provision(context.Background())
@@ -499,7 +525,7 @@ func TestProvision_WhenVendorInterfaceEnumerated_ShouldApplyKeyForgeLayout(t *te
 
 func TestProvision_WhenVendorInterfaceNotEnumerated_ShouldReturnErrNoVendorInterface(t *testing.T) {
 	t.Parallel()
-	applier := &fakeApplier{}
+	applier := &fakeVendor{}
 	s, path, _ := provisionSource([]device.Info{keyboardInfo("kb", "")}, applier, nil)
 
 	err := s.Provision(context.Background())
@@ -510,7 +536,7 @@ func TestProvision_WhenVendorInterfaceNotEnumerated_ShouldReturnErrNoVendorInter
 
 func TestProvision_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {
 	t.Parallel()
-	s, _, _ := provisionSource([]device.Info{{Path: "x", VendorID: 0x1111, ProductID: 0x2222}}, &fakeApplier{}, nil)
+	s, _, _ := provisionSource([]device.Info{{Path: "x", VendorID: 0x1111, ProductID: 0x2222}}, &fakeVendor{}, nil)
 
 	err := s.Provision(context.Background())
 
@@ -530,7 +556,7 @@ func TestProvision_WhenEnumerationFails_ShouldWrapError(t *testing.T) {
 func TestProvision_WhenOpenFails_ShouldWrapError(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("open boom")
-	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, boom)
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{}, boom)
 
 	err := s.Provision(context.Background())
 
@@ -540,7 +566,7 @@ func TestProvision_WhenOpenFails_ShouldWrapError(t *testing.T) {
 func TestProvision_WhenApplyFails_ShouldWrapErrorAndStillClose(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("apply boom")
-	applier := &fakeApplier{applyErr: boom}
+	applier := &fakeVendor{applyErr: boom}
 	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, applier, nil)
 
 	err := s.Provision(context.Background())
@@ -552,7 +578,7 @@ func TestProvision_WhenApplyFails_ShouldWrapErrorAndStillClose(t *testing.T) {
 func TestProvision_WhenCloseFails_ShouldWrapError(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("close boom")
-	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{closeErr: boom}, nil)
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{closeErr: boom}, nil)
 
 	err := s.Provision(context.Background())
 
@@ -563,7 +589,7 @@ func TestProvision_WhenContextDoneBeforeEnumeration_ShouldReturnCtxErrWithoutOpe
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, nil)
+	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{}, nil)
 	s.enumerator = fakeEnumerator{infos: []device.Info{vendorInfo("vendor")}, honorCtx: true}
 
 	err := s.Provision(ctx)
@@ -576,7 +602,7 @@ func TestProvision_WhenContextDoneBeforeOpening_ShouldReturnWrappedCtxErrWithout
 	t.Parallel()
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeApplier{}, nil)
+	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{}, nil)
 
 	err := s.Provision(ctx)
 
@@ -588,7 +614,7 @@ func TestProvision_WhenContextDoneBeforeOpening_ShouldReturnWrappedCtxErrWithout
 func TestProvision_WhenContextCancelledDuringApply_ShouldWrapCtxErrAndStillClose(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
-	applier := &fakeApplier{cancel: cancel}
+	applier := &fakeVendor{cancel: cancel}
 	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, applier, nil)
 
 	err := s.Provision(ctx)
@@ -632,4 +658,202 @@ func TestSideKeyboardKeypad_WhenProvisioned_ShouldEmitExactlyTheCatalogInputs(t 
 		catalog[in.Id] = true
 	}
 	assert.Equal(t, catalog, emitted)
+}
+
+func TestDiscoverDevice_ShouldFlagOnlyKeysAsRGB(t *testing.T) {
+	t.Parallel()
+	s := newSource(fakeEnumerator{infos: []device.Info{keyboardInfo("kb", "")}}, &stubOpener{})
+
+	dev, err := s.DiscoverDevice()
+
+	require.NoError(t, err)
+	for _, in := range dev.Inputs {
+		if in.Kind == protocol.InputKindKey {
+			require.NotNil(t, in.Rgb, in.Id)
+			assert.True(t, *in.Rgb, in.Id)
+		} else {
+			assert.Nil(t, in.Rgb, in.Id)
+		}
+	}
+}
+
+func TestPaintInputs_WhenColorsValid_ShouldPaintInLEDOrderThenSetUserLight(t *testing.T) {
+	t.Parallel()
+	client := &fakeVendor{}
+	s, path, limits := provisionSource([]device.Info{keyboardInfo("kb", ""), vendorInfo("vendor")}, client, nil)
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{
+		"key_0x71": "#000000",
+		"key_0x68": "#FF8000",
+		"key_0x6a": "#00ff7f",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "vendor", *path)
+	assert.Equal(t, vendor.Limits{Slots: 22, LEDs: 10}, *limits)
+	assert.Equal(t, []string{"color 0 ff8000", "color 2 00ff7f", "color 9 000000", "effect 05"}, client.calls)
+	assert.Equal(t, 1, client.closeCalls)
+}
+
+func TestPaintInputs_WhenColorsEmpty_ShouldOnlySetUserLight(t *testing.T) {
+	t.Parallel()
+	client := &fakeVendor{}
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, client, nil)
+
+	err := s.PaintInputs(context.Background(), nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"effect 05"}, client.calls)
+}
+
+func TestPaintInputs_WhenRequestInvalid_ShouldFailWithoutOpening(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		colors map[string]protocol.Color
+		want   error
+	}{
+		{"unknown input", map[string]protocol.Color{"key_0x68": "#ff0000", "key_0x04": "#ff0000"}, ErrInputNotRGB},
+		{"input without LED", map[string]protocol.Color{"encoder_0": "#ff0000"}, ErrInputNotRGB},
+		{"missing hash", map[string]protocol.Color{"key_0x68": "ff0000"}, ErrInvalidColor},
+		{"wrong length", map[string]protocol.Color{"key_0x68": "#fff"}, ErrInvalidColor},
+		{"bad hex", map[string]protocol.Color{"key_0x68": "#gg0000"}, ErrInvalidColor},
+		{"empty", map[string]protocol.Color{"key_0x68": ""}, ErrInvalidColor},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := &fakeVendor{}
+			s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, client, nil)
+
+			err := s.PaintInputs(context.Background(), tc.colors)
+
+			assert.ErrorIs(t, err, tc.want)
+			assert.Contains(t, err.Error(), "hid.PaintInputs")
+			assert.Empty(t, *path, "must not open the vendor interface")
+			assert.Empty(t, client.calls)
+		})
+	}
+}
+
+func TestPaintInputs_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {
+	t.Parallel()
+	s, _, _ := provisionSource([]device.Info{{Path: "x", VendorID: 0x1111, ProductID: 0x2222}}, &fakeVendor{}, nil)
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000"})
+
+	assert.ErrorIs(t, err, ErrNoRecognizedDevice)
+}
+
+func TestPaintInputs_WhenVendorInterfaceNotEnumerated_ShouldReturnErrNoVendorInterface(t *testing.T) {
+	t.Parallel()
+	s, path, _ := provisionSource([]device.Info{keyboardInfo("kb", "")}, &fakeVendor{}, nil)
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000"})
+
+	assert.ErrorIs(t, err, ErrNoVendorInterface)
+	assert.Empty(t, *path)
+}
+
+func TestPaintInputs_WhenOpenFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{}, fmt.Errorf("vendor.Open: %w", vendor.ErrOpen))
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000"})
+
+	assert.ErrorIs(t, err, ErrVendorOpen)
+	assert.Contains(t, err.Error(), "hid.PaintInputs")
+}
+
+func TestPaintInputs_WhenColorWriteFails_ShouldStopBeforeEffectAndStillClose(t *testing.T) {
+	t.Parallel()
+	client := &fakeVendor{colorErr: fmt.Errorf("vendor.SetKeyColor: %w", vendor.ErrNoAck)}
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, client, nil)
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000", "key_0x69": "#00ff00"})
+
+	assert.ErrorIs(t, err, ErrVendorNoAck)
+	assert.Equal(t, []string{"color 0 ff0000"}, client.calls)
+	assert.Equal(t, 1, client.closeCalls)
+}
+
+func TestPaintInputs_WhenEffectFails_ShouldWrapErrorAndStillClose(t *testing.T) {
+	t.Parallel()
+	client := &fakeVendor{effectErr: fmt.Errorf("vendor.SetEffect: %w", vendor.ErrWrite)}
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, client, nil)
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000"})
+
+	assert.ErrorIs(t, err, ErrVendorWrite)
+	assert.Equal(t, 1, client.closeCalls)
+}
+
+func TestPaintInputs_WhenCloseFails_ShouldWrapError(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("close boom")
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{closeErr: boom}, nil)
+
+	err := s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000"})
+
+	assert.ErrorIs(t, err, boom)
+}
+
+func TestPaintInputs_WhenContextCancelledDuringPaint_ShouldWrapCtxErrAndStillClose(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	client := &fakeVendor{cancel: cancel}
+	s, _, _ := provisionSource([]device.Info{vendorInfo("vendor")}, client, nil)
+
+	err := s.PaintInputs(ctx, map[string]protocol.Color{"key_0x68": "#ff0000", "key_0x69": "#00ff00"})
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{"color 0 ff0000"}, client.calls)
+	assert.Equal(t, 1, client.closeCalls)
+}
+
+func TestVendorCalls_WhenAnotherIsRunning_ShouldWaitForIt(t *testing.T) {
+	t.Parallel()
+	s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{}, nil)
+	s.vendorSem <- struct{}{} // another vendor session in progress
+
+	done := make(chan error, 1)
+	go func() { done <- s.PaintInputs(context.Background(), map[string]protocol.Color{"key_0x68": "#ff0000"}) }()
+
+	select {
+	case err := <-done:
+		t.Fatalf("PaintInputs returned while another vendor call held the interface: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	<-s.vendorSem
+	require.NoError(t, <-done)
+	assert.Equal(t, "vendor", *path)
+}
+
+func TestVendorCalls_WhenContextDoneWhileWaiting_ShouldReturnCtxErrWithoutOpening(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		call func(*Source, context.Context) error
+		op   string
+	}{
+		{"Provision", (*Source).Provision, "hid.Provision"},
+		{"PaintInputs", func(s *Source, ctx context.Context) error {
+			return s.PaintInputs(ctx, map[string]protocol.Color{"key_0x68": "#ff0000"})
+		}, "hid.PaintInputs"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, path, _ := provisionSource([]device.Info{vendorInfo("vendor")}, &fakeVendor{}, nil)
+			s.vendorSem <- struct{}{}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+
+			err := tc.call(s, ctx)
+
+			assert.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.Contains(t, err.Error(), tc.op)
+			assert.Empty(t, *path, "must not open the vendor interface")
+		})
+	}
 }

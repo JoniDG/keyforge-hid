@@ -85,6 +85,13 @@ Out of the box the reference keypad sends `Ctrl+A` from every key and the same v
 
 See [the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout) for the full layout.
 
+To light keys, paint them by input id (works while another process streams the keypad, no `sudo`):
+
+```bash
+./bin/probe -paint 'key_0x68=#ff0000,key_0x69=#00ff00'   # key 1 red, key 2 green
+./bin/probe -vendor-effect spectrum                      # back to the factory rainbow
+```
+
 #### OS permissions
 
 Reading raw HID reports from a keyboard-class interface can require elevated privileges, depending on the OS and on whether the device is seized. Without them, `-stream` fails with a permission error before the first read.
@@ -109,6 +116,10 @@ catalog describes the provisioned keypad; see
 [the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout)),
 and gives up with the wrapped `ctx.Err()` once its context is cancelled or
 times out, so pass a short deadline if the keypad may not answer;
+`PaintInputs` sets the LED color of the inputs the catalog flags `rgb`
+(input id → `#RRGGBB`, `#000000` = off) and switches the keypad to the per-key
+lighting effect, rejecting unknown or LED-less inputs with `ErrInputNotRGB`
+before writing anything;
 `Stream` blocks delivering
 decoded `protocol.InputEvent` values until the context is cancelled, the sink
 returns an error, or a reader fails.
