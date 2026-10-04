@@ -677,7 +677,7 @@ func TestDiscoverDevice_ShouldFlagOnlyKeysAsRGB(t *testing.T) {
 	}
 }
 
-func TestPaintInputs_WhenColorsValid_ShouldPaintInLEDOrderThenSetUserLight(t *testing.T) {
+func TestPaintInputs_WhenColorsValid_ShouldPaintCorrectedInLEDOrderThenSetUserLight(t *testing.T) {
 	t.Parallel()
 	client := &fakeVendor{}
 	s, path, limits := provisionSource([]device.Info{keyboardInfo("kb", ""), vendorInfo("vendor")}, client, nil)
@@ -691,7 +691,8 @@ func TestPaintInputs_WhenColorsValid_ShouldPaintInLEDOrderThenSetUserLight(t *te
 	require.NoError(t, err)
 	assert.Equal(t, "vendor", *path)
 	assert.Equal(t, vendor.Limits{Slots: 22, LEDs: 10}, *limits)
-	assert.Equal(t, []string{"color 0 ff8000", "color 2 00ff7f", "color 9 000000", "effect 05"}, client.calls)
+	// Written gamma-corrected for the keypad's LEDs (vendor.RGB.Corrected).
+	assert.Equal(t, []string{"color 0 ff1700", "color 2 00ff16", "color 9 000000", "effect 05"}, client.calls)
 	assert.Equal(t, 1, client.closeCalls)
 }
 

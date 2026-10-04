@@ -228,7 +228,9 @@ var userLightEffect = vendor.Effect{Style: vendor.StyleUserLight, Speed: 2}
 // PaintInputs sets the LED of exactly the inputs in colors (input id →
 // '#RRGGBB', any case; '#000000' turns the LED off) on the recognized
 // keypad and switches it to the per-key lighting effect those colors
-// need. Inputs left out keep whatever color they had.
+// need. Inputs left out keep whatever color they had. Colors are
+// gamma-corrected for the device's LEDs (vendor.RGB.Corrected) so they
+// look closer to the same '#RRGGBB' on a screen.
 //
 // Every entry is checked before anything is written: an id that is not
 // in the catalog DiscoverDevice reports, or whose input has no LED
@@ -250,7 +252,7 @@ func (s *Source) PaintInputs(ctx context.Context, colors map[string]protocol.Col
 		return err
 	}
 	spec := r.target.Known.Vendor
-	paints, err := ledPaints(spec.LEDs, colors)
+	paints, err := ledPaints(spec.LEDs, spec.Gamma, colors)
 	if err != nil {
 		return fmt.Errorf("hid.PaintInputs: %w", err)
 	}
@@ -270,8 +272,9 @@ type ledPaint struct {
 }
 
 // ledPaints validates colors against the device's LED map and returns
-// them in LED order, so the writes are deterministic.
-func ledPaints(leds []string, colors map[string]protocol.Color) ([]ledPaint, error) {
+// them gamma-corrected for its LEDs, in LED order so the writes are
+// deterministic.
+func ledPaints(leds []string, gamma float64, colors map[string]protocol.Color) ([]ledPaint, error) {
 	index := make(map[string]int, len(leds))
 	for i, id := range leds {
 		index[id] = i
@@ -293,7 +296,7 @@ func ledPaints(leds []string, colors map[string]protocol.Color) ([]ledPaint, err
 		if err != nil {
 			return nil, fmt.Errorf("input %q: %w", id, err)
 		}
-		paints = append(paints, ledPaint{led: led, color: rgb})
+		paints = append(paints, ledPaint{led: led, color: rgb.Corrected(gamma)})
 	}
 	sort.Slice(paints, func(i, j int) bool { return paints[i].led < paints[j].led })
 	return paints, nil
