@@ -259,7 +259,40 @@ func TestDiscoverDevice_ShouldReturnInputsClientsCannotMutateRegistry(t *testing
 	require.NotEmpty(t, dev.Inputs)
 
 	dev.Inputs[0].Id = "mutated"
-	assert.Equal(t, "key_0x68", device.SideKeyboardKeypad.Controls[0].Id)
+	*dev.Inputs[0].Rgb = false
+	dev.Inputs[0].Layout.X = 42
+	want := device.SideKeyboardKeypad.Controls[0]
+	assert.Equal(t, "key_0x68", want.Id)
+	assert.True(t, *want.Rgb)
+	assert.InDelta(t, 0, want.Layout.X, 0)
+}
+
+func TestCopyInputs_ShouldDeepCopyOptionalFields(t *testing.T) {
+	t.Parallel()
+	label, rgb, w, h := "Enter", true, 2.0, 0.5
+	src := []protocol.Input{{
+		Id: "k", Kind: protocol.InputKindKey, Label: &label, Rgb: &rgb,
+		Layout: &protocol.InputLayout{X: 1, Y: 2, W: &w, H: &h},
+	}}
+
+	out := copyInputs(src)
+	require.Equal(t, src, out)
+	*out[0].Label = "x"
+	*out[0].Rgb = false
+	*out[0].Layout.W = 9
+	*out[0].Layout.H = 9
+
+	assert.Equal(t, "Enter", label)
+	assert.True(t, rgb)
+	assert.InDelta(t, 2.0, w, 0)
+	assert.InDelta(t, 0.5, h, 0)
+}
+
+func TestCopyInputs_WhenOptionalFieldsAbsent_ShouldKeepThemNil(t *testing.T) {
+	t.Parallel()
+	out := copyInputs([]protocol.Input{{Id: "e", Kind: protocol.InputKindEncoder}})
+
+	assert.Equal(t, []protocol.Input{{Id: "e", Kind: protocol.InputKindEncoder}}, out)
 }
 
 func TestDiscoverDevice_WhenNoRecognizedDevice_ShouldReturnSentinel(t *testing.T) {

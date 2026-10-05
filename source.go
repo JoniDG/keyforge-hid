@@ -405,14 +405,31 @@ func toProtocolDevice(d device.IdentifiedDevice, id protocol.DeviceID) protocol.
 	}
 }
 
-// copyInputs returns a fresh non-nil slice over the catalog entries:
-// mutating the returned slice (append, or reassigning an entry's value
-// fields) can't disturb the shared registry entry, and the required
-// "inputs" field always marshals as an array rather than null.
+// copyInputs deep-copies the catalog entries so a client mutating the
+// result (including through Label, Rgb or Layout) can't disturb the
+// shared registry entry, and the required "inputs" field always marshals
+// as an array rather than null.
 func copyInputs(src []protocol.Input) []protocol.Input {
 	out := make([]protocol.Input, len(src))
-	copy(out, src)
+	for i, in := range src {
+		out[i] = in
+		out[i].Label = clonePtr(in.Label)
+		out[i].Rgb = clonePtr(in.Rgb)
+		out[i].Layout = clonePtr(in.Layout)
+		if in.Layout != nil {
+			out[i].Layout.W = clonePtr(in.Layout.W)
+			out[i].Layout.H = clonePtr(in.Layout.H)
+		}
+	}
 	return out
+}
+
+func clonePtr[T float64 | bool | string | protocol.InputLayout](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // optionalString returns a pointer to s, or nil when s is empty, matching
