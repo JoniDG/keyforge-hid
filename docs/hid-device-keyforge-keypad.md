@@ -77,22 +77,24 @@ input slots (§4.3) so every input emits a distinct code. The layout
 persists on the device; `probe -factory-layout` writes the factory
 values back slot by slot.
 
-**Canonical orientation.** Labels are numbered with the keypad
-horizontal and the encoders on the right. The numbering doesn't change
-if the keypad is rotated (a binding follows the physical input);
-rendering it in another orientation is a presentation concern for the
-GUI.
+**Canonical orientation.** The catalog's `layout` (key units, origin at
+the top left, `y` growing downwards) and the `Key 1…10` numbering below
+describe the keypad horizontal with the encoders on the right. That
+numbering is only a reference for this document: the catalog sends no
+labels, and the GUI numbers the inputs by position in whatever rotation
+the user sets for the device. Rotating it doesn't change any `input_id`,
+so a binding follows the physical input.
 
 ```
 Key 1  Key 2  Key 3  Key 4  Key 5    Encoder 1
 Key 6  Key 7  Key 8  Key 9  Key 10   Encoder 2
 ```
 
-| Physical input     | Slots    | Emits                                   | `input_id`              | Label       |
-| ------------------ | -------- | --------------------------------------- | ----------------------- | ----------- |
-| Keys 1–10          | 0–9      | F13–F22 (usages `0x68`–`0x71`), no mods | `key_0x68`…`key_0x71`   | Key 1…10    |
-| Encoder 1          | 16–18    | Mute / Volume Up / Volume Down (factory) | `encoder_0`            | Encoder 1   |
-| Encoder 2          | 19–21    | Play/Pause / Next Track / Prev Track     | `encoder_1`            | Encoder 2   |
+| Physical input     | Slots    | Emits                                   | `input_id`              | `layout` (x, y)              |
+| ------------------ | -------- | --------------------------------------- | ----------------------- | ---------------------------- |
+| Keys 1–10          | 0–9      | F13–F22 (usages `0x68`–`0x71`), no mods | `key_0x68`…`key_0x71`   | Keys 1–5: (0–4, 0); 6–10: (0–4, 1) |
+| Encoder 1          | 16–18    | Mute / Volume Up / Volume Down (factory) | `encoder_0`            | (5.5, 0)                     |
+| Encoder 2          | 19–21    | Play/Pause / Next Track / Prev Track     | `encoder_1`            | (5.5, 1)                     |
 
 The encoders stay on Consumer Control, so they keep `kind: encoder` and
 the `click`/`rotate_cw`/`rotate_ccw` actions. Without KeyForge running

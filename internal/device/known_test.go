@@ -125,36 +125,61 @@ func TestSideKeyboardKeypad_Factory_ShouldMatchOutOfTheBoxSlots(t *testing.T) {
 func TestSideKeyboardKeypad_DeclaresLogicalControlCatalog(t *testing.T) {
 	t.Parallel()
 	want := []struct {
-		id    string
-		kind  protocol.InputKind
-		label string
-		rgb   bool
+		id   string
+		kind protocol.InputKind
+		x, y float64
+		rgb  bool
 	}{
-		{"key_0x68", protocol.InputKindKey, "Key 1", true},
-		{"key_0x69", protocol.InputKindKey, "Key 2", true},
-		{"key_0x6a", protocol.InputKindKey, "Key 3", true},
-		{"key_0x6b", protocol.InputKindKey, "Key 4", true},
-		{"key_0x6c", protocol.InputKindKey, "Key 5", true},
-		{"key_0x6d", protocol.InputKindKey, "Key 6", true},
-		{"key_0x6e", protocol.InputKindKey, "Key 7", true},
-		{"key_0x6f", protocol.InputKindKey, "Key 8", true},
-		{"key_0x70", protocol.InputKindKey, "Key 9", true},
-		{"key_0x71", protocol.InputKindKey, "Key 10", true},
-		{"encoder_0", protocol.InputKindEncoder, "Encoder 1", false},
-		{"encoder_1", protocol.InputKindEncoder, "Encoder 2", false},
+		{"key_0x68", protocol.InputKindKey, 0, 0, true},
+		{"key_0x69", protocol.InputKindKey, 1, 0, true},
+		{"key_0x6a", protocol.InputKindKey, 2, 0, true},
+		{"key_0x6b", protocol.InputKindKey, 3, 0, true},
+		{"key_0x6c", protocol.InputKindKey, 4, 0, true},
+		{"key_0x6d", protocol.InputKindKey, 0, 1, true},
+		{"key_0x6e", protocol.InputKindKey, 1, 1, true},
+		{"key_0x6f", protocol.InputKindKey, 2, 1, true},
+		{"key_0x70", protocol.InputKindKey, 3, 1, true},
+		{"key_0x71", protocol.InputKindKey, 4, 1, true},
+		{"encoder_0", protocol.InputKindEncoder, 5.5, 0, false},
+		{"encoder_1", protocol.InputKindEncoder, 5.5, 1, false},
 	}
 	require.Len(t, SideKeyboardKeypad.Controls, len(want))
 	for i, w := range want {
 		got := SideKeyboardKeypad.Controls[i]
 		assert.Equal(t, w.id, got.Id)
 		assert.Equal(t, w.kind, got.Kind)
-		require.NotNil(t, got.Label)
-		assert.Equal(t, w.label, *got.Label)
+		assert.Nil(t, got.Label, "%s must not carry a positional label", w.id)
+		require.NotNil(t, got.Layout, "%s needs a layout", w.id)
+		assert.Equal(t, protocol.InputLayout{X: w.x, Y: w.y}, *got.Layout, w.id)
 		if w.rgb {
 			require.NotNil(t, got.Rgb, "%s should be flagged rgb", w.id)
 			assert.True(t, *got.Rgb)
 		} else {
 			assert.Nil(t, got.Rgb, "%s has no LED", w.id)
+		}
+	}
+}
+
+// The GUI draws the device from these rects, so two inputs must never
+// share space.
+func TestKnownDevices_ControlLayouts_ShouldNotOverlap(t *testing.T) {
+	t.Parallel()
+	size := func(v *float64) float64 {
+		if v == nil {
+			return 1
+		}
+		return *v
+	}
+	for _, d := range []KnownDevice{SideKeyboardKeypad} {
+		for i, a := range d.Controls {
+			require.NotNil(t, a.Layout, "%s: %s needs a layout", d.Name, a.Id)
+			for _, b := range d.Controls[i+1:] {
+				require.NotNil(t, b.Layout, "%s: %s needs a layout", d.Name, b.Id)
+				la, lb := *a.Layout, *b.Layout
+				overlap := la.X < lb.X+size(lb.W) && lb.X < la.X+size(la.W) &&
+					la.Y < lb.Y+size(lb.H) && lb.Y < la.Y+size(la.H)
+				assert.False(t, overlap, "%s: %s overlaps %s", d.Name, a.Id, b.Id)
+			}
 		}
 	}
 }
@@ -170,26 +195,4 @@ func TestSideKeyboardKeypad_LEDs_ShouldMatchRGBControls(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, rgb, SideKeyboardKeypad.Vendor.LEDs)
-}
-
-func TestRGBKey_ShouldFlagKeyAsRGB(t *testing.T) {
-	t.Parallel()
-	got := rgbKey("key_0x68", "Key 1")
-
-	assert.Equal(t, "key_0x68", got.Id)
-	assert.Equal(t, protocol.InputKindKey, got.Kind)
-	require.NotNil(t, got.Label)
-	assert.Equal(t, "Key 1", *got.Label)
-	require.NotNil(t, got.Rgb)
-	assert.True(t, *got.Rgb)
-}
-
-func TestControl_ShouldSetLabelPointer(t *testing.T) {
-	t.Parallel()
-	got := control("encoder_0", protocol.InputKindEncoder, "Encoder")
-
-	assert.Equal(t, "encoder_0", got.Id)
-	assert.Equal(t, protocol.InputKindEncoder, got.Kind)
-	require.NotNil(t, got.Label)
-	assert.Equal(t, "Encoder", *got.Label)
 }

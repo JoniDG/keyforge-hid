@@ -75,17 +75,17 @@ type VendorInterface struct {
 	Factory []vendor.Slot
 }
 
-// control builds a logical input catalog entry with a non-empty label.
-func control(id string, kind protocol.InputKind, label string) protocol.Input {
-	return protocol.Input{Id: id, Kind: kind, Label: &label}
+// key builds a catalog entry for a key with an LED at (x, y) in the
+// device's canonical orientation, in key units.
+func key(id string, x, y float64) protocol.Input {
+	rgb := true
+	return protocol.Input{Id: id, Kind: protocol.InputKindKey, Rgb: &rgb, Layout: &protocol.InputLayout{X: x, Y: y}}
 }
 
-// rgbKey builds a key catalog entry flagged as having an LED.
-func rgbKey(id, label string) protocol.Input {
-	in := control(id, protocol.InputKindKey, label)
-	rgb := true
-	in.Rgb = &rgb
-	return in
+// encoder builds a catalog entry for an encoder at (x, y) in the device's
+// canonical orientation, in key units.
+func encoder(id string, x, y float64) protocol.Input {
+	return protocol.Input{Id: id, Kind: protocol.InputKindEncoder, Layout: &protocol.InputLayout{X: x, Y: y}}
 }
 
 // SideKeyboardKeypad is the 10-key + 2-encoder keypad that ships under
@@ -101,8 +101,9 @@ func rgbKey(id, label string) protocol.Input {
 // volume/mute usages, so the inputs are indistinguishable. Controls
 // describes the device after Source.Provision has written Layout; see
 // docs/hid-device-keyforge-keypad.md for the slot map and the canonical
-// orientation the labels are numbered in (horizontal, encoders on the
-// right, keys 1–5 on the top row).
+// orientation the layout is given in (horizontal, encoders on the right,
+// keys 1–5 on the top row). Entries carry no label: the GUI numbers them
+// by position in whatever rotation the user picks.
 var SideKeyboardKeypad = KnownDevice{
 	VendorID:  0x6D82,
 	ProductID: 0xDC83,
@@ -112,18 +113,11 @@ var SideKeyboardKeypad = KnownDevice{
 		{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001},
 	},
 	Controls: []protocol.Input{
-		rgbKey("key_0x68", "Key 1"),
-		rgbKey("key_0x69", "Key 2"),
-		rgbKey("key_0x6a", "Key 3"),
-		rgbKey("key_0x6b", "Key 4"),
-		rgbKey("key_0x6c", "Key 5"),
-		rgbKey("key_0x6d", "Key 6"),
-		rgbKey("key_0x6e", "Key 7"),
-		rgbKey("key_0x6f", "Key 8"),
-		rgbKey("key_0x70", "Key 9"),
-		rgbKey("key_0x71", "Key 10"),
-		control("encoder_0", protocol.InputKindEncoder, "Encoder 1"),
-		control("encoder_1", protocol.InputKindEncoder, "Encoder 2"),
+		key("key_0x68", 0, 0), key("key_0x69", 1, 0), key("key_0x6a", 2, 0), key("key_0x6b", 3, 0), key("key_0x6c", 4, 0),
+		key("key_0x6d", 0, 1), key("key_0x6e", 1, 1), key("key_0x6f", 2, 1), key("key_0x70", 3, 1), key("key_0x71", 4, 1),
+		// Half a key of gap between the keys and the encoder column.
+		encoder("encoder_0", 5.5, 0),
+		encoder("encoder_1", 5.5, 1),
 	},
 	// Slots 0–21 back the ten keys and the two encoders' click/CW/CCW;
 	// the firmware answers for slots past 21 but nothing is wired to
