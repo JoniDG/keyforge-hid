@@ -487,13 +487,21 @@ or layout.
 
 ## 7. Known limitations and open follow-ups
 
-- **Provisioning is manual.** Keys and encoders are only distinct
-  after `Source.Provision(ctx)` runs; nothing calls it automatically yet.
-  Bindings made against the factory chord (`mod_lctrl` / `key_0x04`)
-  stop matching once the keypad is provisioned.
-- **OS side effects of F13–F22.** Without seize, some provisioned keys
-  also trigger system actions (see §2.1). Accepted trade-off; the
-  daemon should seize a provisioned keypad.
+- **Provisioning runs on every daemon start.** `keyforged` calls
+  `Source.Provision(ctx)` on the discovered keypad before it starts
+  streaming (keyforge-core `internal/daemon/keypad.go`), bounded by a
+  5 s timeout. Only the slots that differ are written, so re-running it
+  is cheap. A failure is reported but not fatal: the daemon keeps
+  running with the keypad as it is. Once provisioning succeeds, the
+  daemon moves bindings made against the factory chord
+  (`mod_lctrl` / `key_0x04`) to `key_0x68`. Outside the daemon (e.g.
+  `probe`), the keypad keeps whatever layout was last written.
+- **OS side effects of F13–F22.** The daemon shares the keypad with the
+  OS on every platform today, so some provisioned keys also trigger
+  system actions (see §2.1). On macOS it never seizes, because seizing
+  a keyboard TLC needs root (§5.1); on Linux and Windows seize is still
+  a stub (see below). Accepted trade-off until there is a seize path
+  that works without root.
 - **RGB.** `Source.PaintInputs` only sets per-key colors under the
   user light effect; the other effects (breath, spectrum, …) are only
   reachable through probe. The colors persist on the device, so after a
