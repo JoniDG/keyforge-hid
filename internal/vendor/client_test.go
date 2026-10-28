@@ -14,18 +14,27 @@ import (
 // fakeTransport records every write and answers each one with the
 // replies produced by respond, mimicking the keypad's ack behavior.
 type fakeTransport struct {
-	writes     [][]byte
-	pending    [][]byte
-	respond    func(out []byte) [][]byte
-	writeErr   error
-	readErr    error
-	onRead     func()
-	closeErr   error
-	closeCalls int
+	writes   [][]byte
+	pending  [][]byte
+	respond  func(out []byte) [][]byte
+	writeErr error
+	// rejectWrites, when positive, limits writeErr to that many writes;
+	// the ones after it go through.
+	rejectWrites int
+	attempts     int
+	readErr      error
+	onWrite      func()
+	onRead       func()
+	closeErr     error
+	closeCalls   int
 }
 
 func (f *fakeTransport) Write(p []byte) (int, error) {
-	if f.writeErr != nil {
+	f.attempts++
+	if f.onWrite != nil {
+		f.onWrite()
+	}
+	if f.writeErr != nil && (f.rejectWrites == 0 || f.attempts <= f.rejectWrites) {
 		return 0, f.writeErr
 	}
 	f.writes = append(f.writes, append([]byte(nil), p...))
@@ -236,12 +245,43 @@ func TestClient_WriteSlot_WhenIndexIsInvalid_ShouldReturnErrInvalidArgument(t *t
 func TestClient_WriteSlot_WhenWriteFails_ShouldWrapErrWrite(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("pipe")
-	c := newTestClient(&fakeTransport{writeErr: cause})
+	f := &fakeTransport{writeErr: cause}
+	c := newTestClient(f)
 
 	err := c.WriteSlot(context.Background(), 0, DisabledSlot())
 
 	assert.ErrorIs(t, err, ErrWrite)
 	assert.ErrorIs(t, err, cause)
+	assert.Equal(t, writeAttempts, f.attempts, "a rejected write is retried before giving up")
+}
+
+func TestClient_WriteSlot_WhenDeviceRejectsWritesBriefly_ShouldRetryAndSucceed(t *testing.T) {
+	t.Parallel()
+	f := &fakeTransport{writeErr: errors.New("IOHIDDeviceSetReport failed"), rejectWrites: writeAttempts - 1, respond: deviceAck(nil)}
+	c := newTestClient(f)
+
+	err := c.WriteSlot(context.Background(), 3, KeyboardSlot(0, 0xA8))
+
+	require.NoError(t, err)
+	assert.Equal(t, writeAttempts, f.attempts)
+	require.Len(t, f.writes, 1, "only the accepted write reaches the device")
+}
+
+func TestClient_SetEffect_WhenContextCancelledWhileWaitingToRetry_ShouldReturnCtxErr(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancelled by the first, rejected write, so ctx ends while the
+	// client waits to resend; the hour-long delay keeps the timer from
+	// winning that race.
+	f := &fakeTransport{writeErr: errors.New("busy"), onWrite: cancel}
+	c := newTestClient(f)
+	c.retryDelay = time.Hour
+
+	err := c.SetEffect(ctx, Effect{Style: StyleSpectrum})
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, ErrWrite)
+	assert.Equal(t, 1, f.attempts)
 }
 
 func TestClient_SetEffect_ShouldEncodeStyleSpeedModeAndColor(t *testing.T) {

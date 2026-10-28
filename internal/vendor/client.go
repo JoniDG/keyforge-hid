@@ -54,6 +54,14 @@ const (
 
 	defaultAckTimeout = 500 * time.Millisecond
 	pollTimeout       = 50 * time.Millisecond
+
+	// The keypad rejects a report that arrives while it is still handling
+	// another process's command (macOS: IOHIDDeviceSetReport fails at
+	// once with 0xE00002BC). Within one Client that cannot happen, since
+	// every command waits for its ack, so a rejected write is retried:
+	// every command is idempotent.
+	writeAttempts     = 4
+	defaultRetryDelay = 20 * time.Millisecond
 )
 
 // Limits bounds the indices a client accepts. Writes persist on the
@@ -85,6 +93,9 @@ type Client struct {
 	t          transport
 	limits     Limits
 	ackTimeout time.Duration
+	// retryDelay is the wait before the first resend of a rejected write;
+	// it doubles on each further attempt.
+	retryDelay time.Duration
 }
 
 // Open opens the vendor interface at the given platform path (the Path
@@ -100,7 +111,7 @@ func open(path string, limits Limits, openPath func(string) (transport, error)) 
 	if err != nil {
 		return nil, fmt.Errorf("vendor.Open %q: %w: %w", path, ErrOpen, err)
 	}
-	return &Client{t: t, limits: limits, ackTimeout: defaultAckTimeout}, nil
+	return &Client{t: t, limits: limits, ackTimeout: defaultAckTimeout, retryDelay: defaultRetryDelay}, nil
 }
 
 // Close releases the underlying transport.
@@ -200,7 +211,8 @@ func (c *Client) SetKeyColor(ctx context.Context, led int, color RGB) error {
 	return nil
 }
 
-// exchange writes one command and waits for its ack. A report only
+// exchange writes one command, resending it if the device rejects the
+// write, and waits for its ack. A report only
 // counts as the ack when it carries ackCmd and echoes the first echoLen
 // bytes of the payload after the length field, so a late ack left over
 // from an earlier timed-out command is skipped rather than taken as
@@ -211,11 +223,8 @@ func (c *Client) exchange(ctx context.Context, ackCmd byte, echoLen int, payload
 	out := make([]byte, 1+reportLength)
 	out[1] = commandClass
 	copy(out[2:], payload)
-	if err := ctx.Err(); err != nil {
+	if err := c.write(ctx, out); err != nil {
 		return nil, fmt.Errorf("command 0x%02x: %w", payload[0], err)
-	}
-	if _, err := c.t.Write(out); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrWrite, err)
 	}
 	echo := payload[2 : 2+echoLen]
 
@@ -243,4 +252,29 @@ func (c *Client) exchange(ctx context.Context, ackCmd byte, echoLen int, payload
 		return nil, fmt.Errorf("command 0x%02x: %w", payload[0], err)
 	}
 	return nil, fmt.Errorf("command 0x%02x: %w", payload[0], ErrNoAck)
+}
+
+// write sends out, retrying up to writeAttempts times while the device
+// rejects it. It returns ctx.Err() once ctx is done, before any attempt
+// or while waiting to retry.
+func (c *Client) write(ctx context.Context, out []byte) error {
+	delay := c.retryDelay
+	for attempt := 1; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := c.t.Write(out)
+		if err == nil {
+			return nil
+		}
+		if attempt == writeAttempts {
+			return fmt.Errorf("%w (%d attempts): %w", ErrWrite, attempt, err)
+		}
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		delay *= 2
+	}
 }
