@@ -176,7 +176,7 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	if err := s.setSeize(s.seize); err != nil {
 		return fmt.Errorf("hid.Stream: %w", err)
 	}
-	err = events.StreamAll(ctx, s.opener, r.id, r.inputs, sink)
+	err = events.StreamAll(ctx, s.opener, r.id, r.target.Known.Codes, r.inputs, sink)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}
@@ -186,8 +186,9 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	return nil
 }
 
-// Provision writes the KeyForge input layout to the recognized keypad
-// so every key and encoder emits a distinct code, matching the input
+// Provision writes the KeyForge input layout for the current OS
+// (device.VendorInterface.PlatformLayout) to the recognized keypad so
+// every key and encoder emits a distinct code, matching the input
 // catalog DiscoverDevice reports. The layout persists on the device and
 // only slots that differ are written, so calling Provision on an
 // already provisioned keypad changes nothing. It returns
@@ -216,7 +217,7 @@ func (s *Source) Provision(ctx context.Context) error {
 	}
 	spec := r.target.Known.Vendor
 	return s.withVendor(ctx, "hid.Provision", path, spec, func(c vendorClient) error {
-		_, err := c.ApplySlots(ctx, spec.Layout)
+		_, err := c.ApplySlots(ctx, spec.PlatformLayout())
 		return err
 	})
 }
