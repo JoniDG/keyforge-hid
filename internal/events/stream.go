@@ -34,8 +34,9 @@ type readerSpec struct {
 }
 
 // StreamAll opens every input in parallel via opener, decodes each
-// stream's reports through the role-appropriate mapper(s), and
-// delivers the resulting InputEvents to sink in arrival order. It
+// stream's reports through the role-appropriate mapper(s), naming the
+// inputs after codes, and delivers the resulting InputEvents to sink in
+// arrival order. It
 // blocks until the parent context is cancelled, sink returns an error,
 // or any reader fails with a non-cancellation error.
 //
@@ -48,8 +49,8 @@ type readerSpec struct {
 // no inputs are decodable, StreamAll returns nil immediately without
 // opening anything. All opened streams are closed before StreamAll
 // returns, even on the error path.
-func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protocol.DeviceID, inputs []device.MatchedInput, sink EventSink) error {
-	specs, err := openAll(opener, deviceID, inputs)
+func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protocol.DeviceID, codes device.Codes, inputs []device.MatchedInput, sink EventSink) error {
+	specs, err := openAll(opener, deviceID, codes, inputs)
 	if err != nil {
 		return err
 	}
@@ -127,11 +128,11 @@ func runReader(ctx context.Context, cancel context.CancelFunc, wg *sync.WaitGrou
 	}
 }
 
-func openAll(opener device.Opener, deviceID protocol.DeviceID, inputs []device.MatchedInput) ([]readerSpec, error) {
+func openAll(opener device.Opener, deviceID protocol.DeviceID, codes device.Codes, inputs []device.MatchedInput) ([]readerSpec, error) {
 	indexByPath := make(map[string]int)
 	specs := make([]readerSpec, 0, len(inputs))
 	for _, in := range inputs {
-		mapper := mapperFor(in.Role, deviceID)
+		mapper := mapperFor(in.Role, deviceID, codes)
 		if mapper == nil {
 			continue
 		}
@@ -162,12 +163,12 @@ func closeAllSpecs(specs []readerSpec) {
 	}
 }
 
-func mapperFor(role device.InputRole, deviceID protocol.DeviceID) reportMapper {
+func mapperFor(role device.InputRole, deviceID protocol.DeviceID, codes device.Codes) reportMapper {
 	switch role {
 	case device.RoleKeyboard:
-		return NewKeyboardMapper(deviceID)
+		return NewKeyboardMapper(deviceID, codes.Keys)
 	case device.RoleEncoder:
-		return NewEncoderMapper(deviceID)
+		return NewEncoderMapper(deviceID, codes.Encoders)
 	default:
 		return nil
 	}

@@ -176,7 +176,7 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	if err := s.setSeize(s.seize); err != nil {
 		return fmt.Errorf("hid.Stream: %w", err)
 	}
-	err = events.StreamAll(ctx, s.opener, r.id, r.inputs, sink)
+	err = events.StreamAll(ctx, s.opener, r.id, r.target.Known.Codes, r.inputs, sink)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}

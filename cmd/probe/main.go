@@ -14,10 +14,10 @@
 // Paint mode (-paint) sets input LEDs through hid.Source.PaintInputs,
 // the same call keyforge-core uses.
 //
-// Vendor mode (-vendor-slots, -vendor-effect, -vendor-color,
-// -provision, -factory-layout) talks to the recognized device's
-// vendor-specific interface instead: it reads or rewrites the input
-// slots, or changes the lighting. It does not need sudo on macOS.
+// Vendor mode (-vendor-slots, -vendor-slot, -vendor-effect,
+// -vendor-color, -provision, -factory-layout) talks to the recognized
+// device's vendor-specific interface instead: it reads or rewrites the
+// input slots, or changes the lighting. It does not need sudo on macOS.
 //
 // Probe asks the platform to seize HID devices by default so the OS
 // stops receiving their reports in parallel; pass -shared to keep
@@ -66,6 +66,7 @@ func run(args []string) error {
 	pathSelector := fs.String("path", "", "with -stream, target the interface whose platform path equals this exact value. Use when two interfaces share a usage. Mutually exclusive with -usage.")
 	shared := fs.Bool("shared", false, "with -stream, do NOT seize HID devices; let the OS receive reports in parallel. Default is to seize on supported platforms.")
 	vendorSlots := fs.Bool("vendor-slots", false, "read the recognized device's input slots (layer 0) over its vendor interface")
+	vendorSlot := fs.String("vendor-slot", "", "write input slots (layer 0) as SLOT=TT:C1C2C3[,SLOT=TT:C1C2C3...] (hex type and codes, e.g. 0=30:070000)")
 	vendorEffect := fs.String("vendor-effect", "", "set the recognized device's lighting effect: off|static|breath|trigger|spectrum|user")
 	vendorColor := fs.String("vendor-color", "", "set one key LED as LED:RRGGBB (switches the effect to user light first)")
 	provision := fs.Bool("provision", false, "write the KeyForge input layout so every key and encoder emits a distinct code")
@@ -89,7 +90,7 @@ func run(args []string) error {
 	if *shared && !*stream {
 		return errors.New("probe: -shared requires -stream")
 	}
-	vendorMode := *vendorSlots || *vendorEffect != "" || *vendorColor != "" || *provision || *factoryLayout
+	vendorMode := *vendorSlots || *vendorSlot != "" || *vendorEffect != "" || *vendorColor != "" || *provision || *factoryLayout
 	if vendorMode && *stream {
 		return errors.New("probe: -vendor-* flags and -stream are mutually exclusive")
 	}
@@ -104,6 +105,16 @@ func run(args []string) error {
 			return errors.New("probe: -paint cannot be combined with -stream or -vendor-* flags")
 		}
 		return runPaint(*paint)
+	}
+	var writes []slotWrite
+	if *vendorSlot != "" {
+		if *provision || *factoryLayout {
+			return errors.New("probe: -vendor-slot cannot be combined with -provision or -factory-layout")
+		}
+		var err error
+		if writes, err = parseSlotWrites(*vendorSlot); err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
 	}
 	var lighting vendorLighting
 	if *vendorEffect != "" {
@@ -130,7 +141,7 @@ func run(args []string) error {
 	identified := device.NewIdentifier(device.DefaultRegistry()).Identify(infos)
 
 	if vendorMode {
-		return runVendor(identified, vendorRequest{readSlots: *vendorSlots, provision: *provision, factoryLayout: *factoryLayout, lighting: lighting})
+		return runVendor(identified, vendorRequest{readSlots: *vendorSlots, writes: writes, provision: *provision, factoryLayout: *factoryLayout, lighting: lighting})
 	}
 	if *stream {
 		seizeStatus := resolveSeize(!*shared, os.Stderr)
@@ -224,7 +235,7 @@ func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usag
 
 	callback := newHexDumpCallback(time.Now())
 	if emitEvents {
-		callback = newEventsCallback(events.DeviceIDFor(target.VendorID, target.ProductID, iface.Serial))
+		callback = newEventsCallback(events.DeviceIDFor(target.VendorID, target.ProductID, iface.Serial), target.Known.Codes.Keys)
 	}
 
 	err = stream.Read(ctx, callback)
@@ -261,7 +272,7 @@ func streamAllInputs(target device.IdentifiedDevice, seize seizeStatus) error {
 
 	deviceID := events.DeviceIDFor(target.VendorID, target.ProductID, inputs[0].Info.Serial)
 	encoder := json.NewEncoder(os.Stdout)
-	err := events.StreamAll(ctx, device.NewOpener(), deviceID, inputs, func(e protocol.InputEvent) error {
+	err := events.StreamAll(ctx, device.NewOpener(), deviceID, target.Known.Codes, inputs, func(e protocol.InputEvent) error {
 		return encoder.Encode(e)
 	})
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -291,11 +302,19 @@ type vendorLighting struct {
 	color  *vendor.RGB
 }
 
+// slotWrite is one input slot to overwrite, from -vendor-slot.
+type slotWrite struct {
+	index int
+	slot  vendor.Slot
+}
+
 // vendorRequest is everything vendor mode was asked to do, in the order
-// runVendor does it: rewrite the layout, change the lighting, then dump
-// the slots (so -vendor-slots shows the result of the other flags).
+// runVendor does it: rewrite the layout or single slots, change the
+// lighting, then dump the slots (so -vendor-slots shows the result of
+// the other flags).
 type vendorRequest struct {
 	readSlots     bool
+	writes        []slotWrite
 	provision     bool
 	factoryLayout bool
 	lighting      vendorLighting
@@ -329,6 +348,12 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 			return fmt.Errorf("probe: %w", err)
 		}
 		fmt.Printf("%s layout applied (%d slot(s) written)\n", name, written)
+	}
+	for _, w := range req.writes {
+		if err := client.WriteSlot(ctx, w.index, w.slot); err != nil {
+			return fmt.Errorf("probe: %w", err)
+		}
+		fmt.Printf("slot %d set to %s\n", w.index, w.slot)
 	}
 	lighting := req.lighting
 	// Colors are stored apart from the effect, so the color goes first:
@@ -390,6 +415,25 @@ func parseLEDColor(s string) (int, vendor.RGB, error) {
 	return led, vendor.RGB{R: b[0], G: b[1], B: b[2]}, nil
 }
 
+func parseSlotWrites(spec string) ([]slotWrite, error) {
+	var writes []slotWrite
+	for _, entry := range strings.Split(spec, ",") {
+		indexPart, slotPart, ok := strings.Cut(entry, "=")
+		index, err := strconv.Atoi(indexPart)
+		if !ok || err != nil {
+			return nil, fmt.Errorf("invalid slot entry %q (want SLOT=TT:C1C2C3)", entry)
+		}
+		typePart, codesPart, ok := strings.Cut(slotPart, ":")
+		t, typeErr := hex.DecodeString(typePart)
+		c, codesErr := hex.DecodeString(codesPart)
+		if !ok || typeErr != nil || codesErr != nil || len(t) != 1 || len(c) != 3 {
+			return nil, fmt.Errorf("invalid slot value %q (want TT:C1C2C3 hex)", slotPart)
+		}
+		writes = append(writes, slotWrite{index: index, slot: vendor.Slot{Type: vendor.SlotType(t[0]), Codes: [3]byte{c[0], c[1], c[2]}}})
+	}
+	return writes, nil
+}
+
 // selectInterface picks the interface of target to stream from. With
 // pathSel set it matches by exact platform path; with usageSel set it
 // matches by UsagePage:Usage and returns the first hit; with neither
@@ -449,8 +493,8 @@ func newHexDumpCallback(start time.Time) func([]byte) error {
 	}
 }
 
-func newEventsCallback(deviceID protocol.DeviceID) func([]byte) error {
-	mapper := events.NewKeyboardMapper(deviceID)
+func newEventsCallback(deviceID protocol.DeviceID, keys map[byte]string) func([]byte) error {
+	mapper := events.NewKeyboardMapper(deviceID, keys)
 	encoder := json.NewEncoder(os.Stdout)
 	return func(report []byte) error {
 		evs, err := mapper.Map(report)
