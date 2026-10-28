@@ -59,12 +59,12 @@ hardware to KeyForge.
 Factory firmware mapping (out of the box, before any KeyForge
 reconfiguration):
 
-| Physical input             | Emitted event                  | HID detail                                  |
-| -------------------------- | ------------------------------ | ------------------------------------------- |
+| Physical input             | Emitted event                  | HID detail                                     |
+| -------------------------- | ------------------------------ | ---------------------------------------------- |
 | Any of the 10 keys         | `Ctrl+A` (Left Ctrl + key `A`) | Boot keyboard report `01 00 04 00 00 00 00 00` |
-| Either encoder, rotate CW  | Consumer Volume Increment      | Consumer Control usage `0x00E9`             |
-| Either encoder, rotate CCW | Consumer Volume Decrement      | Consumer Control usage `0x00EA`             |
-| Either encoder, click      | Consumer Mute                  | Consumer Control usage `0x00E2`             |
+| Either encoder, rotate CW  | Consumer Volume Increment      | Consumer Control usage `0x00E9`                |
+| Either encoder, rotate CCW | Consumer Volume Decrement      | Consumer Control usage `0x00EA`                |
+| Either encoder, click      | Consumer Mute                  | Consumer Control usage `0x00E2`                |
 
 The two physical encoders are **indistinguishable** through the
 firmware's factory mapping: both emit identical Consumer Control
@@ -90,27 +90,50 @@ Key 1  Key 2  Key 3  Key 4  Key 5    Encoder 1
 Key 6  Key 7  Key 8  Key 9  Key 10   Encoder 2
 ```
 
-| Physical input     | Slots    | Emits                                   | `input_id`              | `layout` (x, y)              |
-| ------------------ | -------- | --------------------------------------- | ----------------------- | ---------------------------- |
-| Keys 1–10          | 0–9      | F13–F22 (usages `0x68`–`0x71`), no mods | `key_0x68`…`key_0x71`   | Keys 1–5: (0–4, 0); 6–10: (0–4, 1) |
-| Encoder 1          | 16–18    | Mute / Volume Up / Volume Down (factory) | `encoder_0`            | (5.5, 0)                     |
-| Encoder 2          | 19–21    | Play/Pause / Next Track / Prev Track     | `encoder_1`            | (5.5, 1)                     |
+| Physical input | Slots | Emits                                              | `input_id`            | `layout` (x, y)                    |
+| -------------- | ----- | -------------------------------------------------- | --------------------- | ---------------------------------- |
+| Keys 1–10      | 0–9   | Keyboard usages `0xA5`–`0xAE` (reserved), no mods  | `key_0x68`…`key_0x71` | Keys 1–5: (0–4, 0); 6–10: (0–4, 1) |
+| Encoder 1      | 16–18 | Consumer `0x0007` / `0x0008` / `0x0009` (reserved) | `encoder_0`           | (5.5, 0)                           |
+| Encoder 2      | 19–21 | Consumer `0x000A` / `0x000B` / `0x000C` (reserved) | `encoder_1`           | (5.5, 1)                           |
 
-The encoders stay on Consumer Control, so they keep `kind: encoder` and
-the `click`/`rotate_cw`/`rotate_ccw` actions. Without KeyForge running
-they still act as volume and media controls. The input catalog that
-`DiscoverDevice` reports describes this layout, so the keypad must be
-provisioned for the catalog to match what it emits.
+Slots list click, CW and CCW in that order for each encoder.
 
-**Side effects when nothing captures the keypad.** While KeyForge is
-not running, or runs without seizing the device, the OS receives the
-provisioned codes too. Some high function keys already have a system
-action: on Linux (xkeyboard-config defaults, GNOME/KDE) F20 toggles
-the microphone mute and F21/F22 toggle/enable the touchpad (keys 8–10);
-on macOS F14/F15 often change the display brightness (keys 2–3). The
-factory `Ctrl+A` has the same kind of problem (select all). Run the
-daemon with seize enabled once the keypad is provisioned so the OS
-stops receiving these codes.
+**Why reserved usages.** The goal is that the keypad does only what the
+user binds in KeyForge. Every code it emits also reaches the OS (the
+daemon shares the device; seizing a keyboard needs root on macOS, §5.1),
+so the layout uses usages the HID Usage Tables leave reserved and no OS
+acts on:
+
+- Keyboard `0xA5`–`0xAF`: Linux maps them to `KEY_UNKNOWN`
+  (`hid_keyboard[]` in `drivers/hid/hid-input.c`), which has no keysym.
+- Consumer `0x07`–`0x1F`: Linux maps unlisted Consumer usages to
+  `KEY_UNKNOWN` too. The keypad's Consumer collection declares usages up
+  to `0x23C`, so these are in range.
+- On macOS both sets do nothing: no characters, no brightness, volume or
+  media keys (checked on hardware with an editor focused and a paused
+  video, 2026-10-28).
+
+KeyForge still sees them, because it reads the raw reports. The input
+ids are not derived from these codes: `KnownDevice.Codes` maps each code
+to the catalog id, which kept the ids bindings are keyed on when the
+layout moved off F13–F22.
+
+Keys stay on the boot keyboard report, which carries up to six held
+keys. The Consumer report carries a single usage and sends `00 00` when
+any input is released, so two keys held there could not be told apart
+on release (checked on hardware); that is fine for encoder clicks and
+detents, which are instantaneous.
+
+**Without KeyForge.** The layout persists on the device, so on a computer
+without KeyForge the provisioned keypad does nothing: the OS ignores its
+codes. Writing the factory layout back (`probe -factory-layout`) restores
+`Ctrl+A` and volume/mute.
+
+The input catalog that `DiscoverDevice` reports describes this layout,
+so the keypad must be provisioned for the catalog to match what it
+emits. Unprovisioned, keys report `mod_lctrl` + `key_0x04` and both
+encoders collapse into `encoder_0` (the factory volume/mute usages stay
+in `Codes`).
 
 ---
 
@@ -124,11 +147,11 @@ underlying USB topology is stable.
 Those 8 entries map to **3 physical USB interfaces**, identified by
 their platform path (on macOS, a stable per-session `DevSrvsID:N`):
 
-| Interface | Path (macOS, example)   | TLCs exposed                                                         | Role                                                             |
-| --------- | ----------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| 0         | `DevSrvsID:4295184749`  | `0001:0006` (keyboard alt), `0001:0001/02/0c/80`, `000c:0001` (CC)   | Multi-TLC. KeyForge reads it for **encoder** Consumer Control.   |
-| 1         | `DevSrvsID:4295184751`  | `0001:0006` (boot keyboard)                                          | KeyForge reads it for the **10 physical keys** (boot protocol).  |
-| 2         | `DevSrvsID:4295184750`  | `0xFF00:0x0002` (vendor-specific)                                    | Vendor protocol — RGB + on-device input remapping (§4.3). Opened by `Source.Provision`, `Source.PaintInputs` and probe's vendor mode, never by `Stream`. |
+| Interface | Path (macOS, example)  | TLCs exposed                                                       | Role                                                                                                                                                     |
+| --------- | ---------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0         | `DevSrvsID:4295184749` | `0001:0006` (keyboard alt), `0001:0001/02/0c/80`, `000c:0001` (CC) | Multi-TLC. KeyForge reads it for **encoder** Consumer Control.                                                                                           |
+| 1         | `DevSrvsID:4295184751` | `0001:0006` (boot keyboard)                                        | KeyForge reads it for the **10 physical keys** (boot protocol).                                                                                          |
+| 2         | `DevSrvsID:4295184750` | `0xFF00:0x0002` (vendor-specific)                                  | Vendor protocol — RGB + on-device input remapping (§4.3). Opened by `Source.Provision`, `Source.PaintInputs` and probe's vendor mode, never by `Stream`. |
 
 Several observations that matter when writing code that opens this
 device:
@@ -162,11 +185,11 @@ device:
 
 Standard HID Boot Keyboard report — **8 bytes, no report ID prefix**.
 
-| Byte    | Meaning                                                  |
-| ------- | -------------------------------------------------------- |
-| `[0]`   | Modifier bitmap (lctrl/lshift/lalt/lmeta/rctrl/rshift/ralt/rmeta) |
-| `[1]`   | Reserved (always `0x00`)                                 |
-| `[2..7]` | Up to 6 simultaneous keycodes (set semantics, not ordered) |
+| Byte     | Meaning                                                           |
+| -------- | ----------------------------------------------------------------- |
+| `[0]`    | Modifier bitmap (lctrl/lshift/lalt/lmeta/rctrl/rshift/ralt/rmeta) |
+| `[1]`    | Reserved (always `0x00`)                                          |
+| `[2..7]` | Up to 6 simultaneous keycodes (set semantics, not ordered)        |
 
 Example: pressing one of the 10 keys (factory-mapped to Ctrl+A):
 
@@ -183,30 +206,33 @@ events with stable input IDs (`mod_lctrl`, `key_0x04`, …).
 
 Numbered reports — **3 bytes**, with the report ID in byte 0.
 
-| Byte    | Meaning                                                   |
-| ------- | --------------------------------------------------------- |
-| `[0]`   | Report ID — always `0x03` for this device                 |
-| `[1..2]` | 16-bit little-endian Consumer Control usage code         |
+| Byte     | Meaning                                          |
+| -------- | ------------------------------------------------ |
+| `[0]`    | Report ID — always `0x03` for this device        |
+| `[1..2]` | 16-bit little-endian Consumer Control usage code |
 
-Usages observed on the reference keypad:
+Usages the mapper knows (`KnownDevice.Codes.Encoders`):
 
-| Bytes (after report ID) | Usage  | HID Consumer Page meaning  | KeyForge action                       |
-| ----------------------- | ------ | -------------------------- | ------------------------------------- |
-| `E9 00`                 | `0x00E9` | Volume Increment           | `rotate_cw` on `encoder_0`            |
-| `EA 00`                 | `0x00EA` | Volume Decrement           | `rotate_ccw` on `encoder_0`           |
-| `E2 00`                 | `0x00E2` | Mute                       | `click` on `encoder_0`                |
-| `CD 00`                 | `0x00CD` | Play/Pause                 | `click` on `encoder_1`                |
-| `B5 00`                 | `0x00B5` | Scan Next Track            | `rotate_cw` on `encoder_1`            |
-| `B6 00`                 | `0x00B6` | Scan Previous Track        | `rotate_ccw` on `encoder_1`           |
-| `00 00`                 | `0x0000` | release                    | ignored                               |
+| Bytes (after report ID) | Usage    | HID Consumer Page meaning  | KeyForge action             |
+| ----------------------- | -------- | -------------------------- | --------------------------- |
+| `07 00`                 | `0x0007` | Reserved                   | `click` on `encoder_0`      |
+| `08 00`                 | `0x0008` | Reserved                   | `rotate_cw` on `encoder_0`  |
+| `09 00`                 | `0x0009` | Reserved                   | `rotate_ccw` on `encoder_0` |
+| `0A 00`                 | `0x000A` | Reserved                   | `click` on `encoder_1`      |
+| `0B 00`                 | `0x000B` | Reserved                   | `rotate_cw` on `encoder_1`  |
+| `0C 00`                 | `0x000C` | Reserved                   | `rotate_ccw` on `encoder_1` |
+| `E2 00`                 | `0x00E2` | Mute (factory)             | `click` on `encoder_0`      |
+| `E9 00`                 | `0x00E9` | Volume Increment (factory) | `rotate_cw` on `encoder_0`  |
+| `EA 00`                 | `0x00EA` | Volume Decrement (factory) | `rotate_ccw` on `encoder_0` |
+| `00 00`                 | `0x0000` | release                    | ignored                     |
 
 Every event arrives as a **press + release pair**; the release report
 (`03 00 00`) is dropped silently because rotation has no release
 semantic and the click is emitted on press.
 
-The `CD`/`B5`/`B6` usages only appear once the keypad is provisioned
-(§2.1). Under the factory mapping both encoders emit the `E2`/`E9`/`EA`
-usages and collapse into `encoder_0`.
+The reserved usages come from the KeyForge layout (§2.1). Under the
+factory mapping both encoders emit the `E2`/`E9`/`EA` usages and
+collapse into `encoder_0`.
 
 Decoded by `internal/events.EncoderMapper`. The mapper is stateless
 across reports.
@@ -255,12 +281,12 @@ c0
 
 #### Commands (verified on hardware)
 
-| Command              | Host → device                                                    | Device → host                                    |
-| -------------------- | ---------------------------------------------------------------- | ------------------------------------------------ |
-| Read input slots     | `06 08 3A <off_lo> <off_hi> 00 <layer>`                          | `AA 07 3A <off_lo> <off_hi> 00 00 00` + 56 data bytes (14 slots) |
-| Write one input slot | `06 10 07 <off_lo> <off_hi> 00 <layer> 00 <type> <c1> <c2> <c3>` | `AA 10 01 <off_lo> …` (echo)                     |
-| Set lighting effect  | `06 0B 0B 00 00 01 00 <style> <speed> <mode> 01 01 00 <H> <S> <V>` | `AA 0B 01 …` (echo)                            |
-| Set one key color    | `06 14 03 <led×3> 00 00 00 00 <R> <G> <B>`                       | `AA 14 01 <led×3> …` (echo)                      |
+| Command              | Host → device                                                      | Device → host                                                    |
+| -------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Read input slots     | `06 08 3A <off_lo> <off_hi> 00 <layer>`                            | `AA 07 3A <off_lo> <off_hi> 00 00 00` + 56 data bytes (14 slots) |
+| Write one input slot | `06 10 07 <off_lo> <off_hi> 00 <layer> 00 <type> <c1> <c2> <c3>`   | `AA 10 01 <off_lo> …` (echo)                                     |
+| Set lighting effect  | `06 0B 0B 00 00 01 00 <style> <speed> <mode> 01 01 00 <H> <S> <V>` | `AA 0B 01 …` (echo)                                              |
+| Set one key color    | `06 14 03 <led×3> 00 00 00 00 <R> <G> <B>`                         | `AA 14 01 <led×3> …` (echo)                                      |
 
 - `off` = `4 × slot` (little-endian 16-bit): each slot is 4 bytes
   `<type> <c1> <c2> <c3>`. Reads return 56 bytes per call, so reading
@@ -284,20 +310,46 @@ The configurator also issues a bulk slot write,
 `06 09 3B <off_lo> <off_hi> 00 <layer> 00` + 56 data bytes. It was not
 exercised.
 
+#### Commands seen in the configurator (not exercised)
+
+Read from the configurator bundle (`page-*.js`, the `getDeviceData` /
+`sendDeviceData` callers) on 2026-10-28. Every one uses class `06`
+except the firmware update ones.
+
+| Bytes after `06`        | Configurator method                         | Notes                                                                 |
+| ----------------------- | ------------------------------------------- | --------------------------------------------------------------------- |
+| `05`                    | `getKeyboardConfig`                         | Version, PID, firmware, `profileCnt`/`profile`, `layerCnt`/`layer`    |
+| `07 38 <off>`           | `getKeyInfosData`                           | Another slot read                                                     |
+| `09 3B <off> …`         | `setKeyInfos`                               | Bulk slot write (above)                                               |
+| `0A`                    | `getLightConfig`                            | Reads the current effect                                              |
+| `0C` / `0D`             | `getMacroData` / `setMacroData`             | Macro storage (4096 bytes)                                            |
+| `0F 04`                 | `resetMacroData`                            | Clears the macros                                                     |
+| `12 3B <off> …`         | `setKeyColorsInfos`                         | Bulk per-key color write                                              |
+| `13 3A <off>`           | `getKeyInfos`                               | Reads the per-key colors                                              |
+| `16 00 00 00 01 00 <m>` | `setLightEffectConfig`                      | Reads the stored settings of effect `<m>` before writing them with 0B |
+| `40` / `41`             | `setURLConfig` / `getURLConfig`             | URLs for the Open website slot type                                   |
+| `FB <n>`                | `setCurrentProfile`                         | Selects the active profile                                            |
+| `FC 02 00 00 <t>`       | `setAutoSleepTime`                          | Auto-sleep timeout                                                    |
+| `55 FF …` / `5A A0`     | `startUpdate` … `endUpdate`, `goToIAP`      | Firmware update; never send (see below)                               |
+
+There is no "apply without saving" command or commit step: every write is
+final and persists, which is why the KeyForge layout is chosen to be
+harmless when KeyForge is absent (§2.1) rather than undone on exit.
+
 #### Input slot map
 
-| Slot  | Physical input           | Factory value            |
-| ----- | ------------------------ | ------------------------ |
-| 0–4   | Row 1, keys 1–5 (L→R)    | `20 01 04 00` (`Ctrl+A`) |
-| 5–9   | Row 2, keys 1–5 (L→R)    | `20 01 04 00` (`Ctrl+A`) |
-| 10–15 | —                        | `13 00 00 00` (disabled) |
-| 16    | Encoder 1 (row 1) click  | `30 E2 00 00` (Mute)     |
-| 17    | Encoder 1 rotate CW      | `30 E9 00 00` (Vol+)     |
-| 18    | Encoder 1 rotate CCW     | `30 EA 00 00` (Vol−)     |
-| 19    | Encoder 2 (row 2) click  | `30 E2 00 00` (Mute)     |
-| 20    | Encoder 2 rotate CW      | `30 E9 00 00` (Vol+)     |
-| 21    | Encoder 2 rotate CCW     | `30 EA 00 00` (Vol−)     |
-| 22–27 | —                        | `13 00 00 00` (disabled) |
+| Slot  | Physical input          | Factory value            |
+| ----- | ----------------------- | ------------------------ |
+| 0–4   | Row 1, keys 1–5 (L→R)   | `20 01 04 00` (`Ctrl+A`) |
+| 5–9   | Row 2, keys 1–5 (L→R)   | `20 01 04 00` (`Ctrl+A`) |
+| 10–15 | —                       | `13 00 00 00` (disabled) |
+| 16    | Encoder 1 (row 1) click | `30 E2 00 00` (Mute)     |
+| 17    | Encoder 1 rotate CW     | `30 E9 00 00` (Vol+)     |
+| 18    | Encoder 1 rotate CCW    | `30 EA 00 00` (Vol−)     |
+| 19    | Encoder 2 (row 2) click | `30 E2 00 00` (Mute)     |
+| 20    | Encoder 2 rotate CW     | `30 E9 00 00` (Vol+)     |
+| 21    | Encoder 2 rotate CCW    | `30 EA 00 00` (Vol−)     |
+| 22–27 | —                       | `13 00 00 00` (disabled) |
 
 LED indices use the same numbering as key slots 0–9. The encoders have
 no LEDs. The catalog flags the ten keys `rgb` and maps input id to LED
@@ -314,15 +366,15 @@ as is makes the weaker channels of a mix far too strong and washes it
 out toward white. Measured by eye on the reference keypad, comparing
 against the same colors on a screen:
 
-| Test                                            | Seen on the LEDs                                  |
-| ----------------------------------------------- | ------------------------------------------------- |
-| Primaries, secondaries, white, `#808080`        | Correct; white has no tint                        |
-| Green ramp `ff` → `01` (halving), `00`          | All 9 distinguishable (`01` faint), `00` off      |
-| Red → yellow → green sweep at full intensity    | Every step distinguishable                        |
-| `#80ff80`, `#c0ffc0`                            | White, not light green                            |
-| Pastels/greens with gamma 2.2 / 2.8 / 3.5 / 4.5 | Closer to the screen up to 3.5; 4.5 overshoots    |
-| `#00a3d7`, `#4d22b3` with plain gamma 3.5       | Too dim; worse than uncorrected                   |
-| Same, keeping the brightest channel             | Closest to the screen                             |
+| Test                                            | Seen on the LEDs                               |
+| ----------------------------------------------- | ---------------------------------------------- |
+| Primaries, secondaries, white, `#808080`        | Correct; white has no tint                     |
+| Green ramp `ff` → `01` (halving), `00`          | All 9 distinguishable (`01` faint), `00` off   |
+| Red → yellow → green sweep at full intensity    | Every step distinguishable                     |
+| `#80ff80`, `#c0ffc0`                            | White, not light green                         |
+| Pastels/greens with gamma 2.2 / 2.8 / 3.5 / 4.5 | Closer to the screen up to 3.5; 4.5 overshoots |
+| `#00a3d7`, `#4d22b3` with plain gamma 3.5       | Too dim; worse than uncorrected                |
+| Same, keeping the brightest channel             | Closest to the screen                          |
 
 No channel dominates and there is no threshold, so neither per-channel
 scaling nor a lookup table is needed. `Source.PaintInputs` corrects
@@ -337,7 +389,7 @@ as orange). Very light tints such as `#c0ffc0` still look white: an RGB
 LED can't separate them from white. `probe -vendor-color` writes raw
 values (for measuring); `probe -paint` goes through the correction.
 
-Verified end to end: writing `20 00 68 00` (F13) to slot 0 made
+Verified end to end (with the earlier F13–F22 layout): writing `20 00 68 00` (F13) to slot 0 made
 row 1 key 1 emit `key_0x68` while the other keys kept emitting
 `Ctrl+A`; writing F14/F15/F16 to slots 19/20/21 made encoder 2 emit
 `key_0x69`/`key_0x6a`/`key_0x6b` on click/CW/CCW while encoder 1 kept
@@ -346,15 +398,19 @@ ten keys become distinguishable.**
 
 #### Slot types
 
-| Type   | Meaning (configurator name)         | `c1`, `c2`, `c3`                                                  | Status     |
-| ------ | ----------------------------------- | ----------------------------------------------------------------- | ---------- |
-| `0x13` | Disabled (`DISKEY`)                 | zero                                                              | observed   |
-| `0x20` | Keyboard (`Standard`)               | `c1` modifier bitmap (bit0 LCtrl, 1 LShift, 2 LAlt, 3 LWin, 4 RCtrl, 5 RShift, 6 RAlt, 7 RWin), `c2` HID keyboard usage | verified   |
-| `0x30` | Consumer Control                    | `c1`/`c2` 16-bit little-endian Consumer usage                     | observed   |
-| `0x11` | Mouse move (`MouseMove`)            | —                                                                 | untested   |
-| `0x60` | Macro                               | `c1` macro number (`M<n>`)                                        | untested   |
-| `0x80` | Open website (`OpenWebsite`)        | —                                                                 | untested   |
-| `0xFF` | Custom combination                  | —                                                                 | untested   |
+| Type   | Meaning (configurator name)  | `c1`, `c2`, `c3`                                                                                                        | Status   |
+| ------ | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- | -------- |
+| `0x13` | Disabled (`DISKEY`)          | zero                                                                                                                    | observed |
+| `0x20` | Keyboard (`Standard`)        | `c1` modifier bitmap (bit0 LCtrl, 1 LShift, 2 LAlt, 3 LWin, 4 RCtrl, 5 RShift, 6 RAlt, 7 RWin), `c2` HID keyboard usage | verified |
+| `0x30` | Consumer Control             | `c1`/`c2` 16-bit little-endian Consumer usage                                                                           | verified |
+| `0x10` | Mouse button / wheel         | `c1` button bitmap (1 left, 2 right, 4 middle, 8 back, 16 forward)                                                      | untested |
+| `0x11` | Mouse move (`MouseMove`)     | —                                                                                                                       | untested |
+| `0x1F` | Firmware function            | `c1` function (lighting, profile switch `0x13`, keyboard reset `0x10`, …)                                               | untested |
+| `0x40` | System control               | `c1` 1 Power, 2 Sleep, 4 Wake                                                                                           | untested |
+| `0x70` | Wheel                        | `c1` `01` up, `FF` down                                                                                                 | untested |
+| `0x60` | Macro                        | `c1` macro number (`M<n>`)                                                                                              | untested |
+| `0x80` | Open website (`OpenWebsite`) | —                                                                                                                       | untested |
+| `0xFF` | Custom combination           | —                                                                                                                       | untested |
 
 #### Do not send
 
@@ -380,6 +436,12 @@ Tested against macOS Sequoia (15.x) and macOS 27.
   (signed binary with Input Monitoring + Accessibility entitlements
   granted through System Settings) is on the roadmap once the daemon
   ships.
+
+- **Reading a keyboard TLC needs Input Monitoring.** Even in shared
+  mode, a process without the Input Monitoring grant (System Settings →
+  Privacy & Security) fails to open the keyboard and Consumer
+  interfaces with `0xE00002E2` (not permitted). The vendor interface
+  does not need it.
 
 - **hidapi resets the open mode to seize on init**. Per
   `hid_darwin.c::hid_init`, creating the HID manager sets the global
@@ -419,17 +481,14 @@ Tested against macOS Sequoia (15.x) and macOS 27.
 
 ### 5.3 Windows (planned)
 
-- `hid.OpenPath` will use the user-mode HID class driver. The legacy
-  keyboard stack (`WM_KEYDOWN`, system audio key dispatch) still
-  delivers events to other apps in parallel; closing that channel
-  needs `RegisterRawInputDevices` with `RIDEV_NOLEGACY | RIDEV_INPUTSINK`
-  on the top-level usages the keypad exposes.
-- Consumer Control (volume / mute) does not respect `RIDEV_NOLEGACY`
-  fully; if the parallel delivery proves intolerable, the fallback is
-  a signed kernel-mode HID filter driver — out of scope for the core
-  project, deferred to packaging time.
-- Implementation lives in `internal/device/seize_windows.go`
-  (currently a stub).
+- With the reserved layout (§2.1) the OS has nothing to act on, so
+  seizing is not needed to keep the keypad quiet.
+- The open problem is reading the keys: Windows opens keyboard
+  collections exclusively, so hidapi cannot read the boot keyboard
+  interface, and Raw Input drops usages without a scan code such as
+  `0xA5` (§7). The Consumer Control collection (encoders) is readable
+  through hidapi.
+- `internal/device/seize_windows.go` is still a stub.
 
 ---
 
@@ -463,6 +522,7 @@ sudo ./bin/probe -stream -events
 ./bin/probe -vendor-effect spectrum     # back to the factory rainbow
 ./bin/probe -provision -vendor-slots    # write the KeyForge layout (§2.1) and show it
 ./bin/probe -factory-layout             # undo it: every key back to Ctrl+A
+./bin/probe -vendor-slot 0=30:070000    # write single slots as SLOT=TT:C1C2C3 (hex), for experiments
 ```
 
 Lighting and slot changes persist on the device.
@@ -496,12 +556,18 @@ or layout.
   daemon moves bindings made against the factory chord
   (`mod_lctrl` / `key_0x04`) to `key_0x68`. Outside the daemon (e.g.
   `probe`), the keypad keeps whatever layout was last written.
-- **OS side effects of F13–F22.** The daemon shares the keypad with the
-  OS on every platform today, so some provisioned keys also trigger
-  system actions (see §2.1). On macOS it never seizes, because seizing
-  a keyboard TLC needs root (§5.1); on Linux and Windows seize is still
-  a stub (see below). Accepted trade-off until there is a seize path
-  that works without root.
+- **A provisioned keypad does nothing without KeyForge.** The layout
+  persists and uses reserved usages no OS acts on (§2.1), so on a
+  computer without KeyForge the keys and encoders are inert until the
+  factory layout is written back. This is intended: with KeyForge the
+  keypad only does what the user binds, without seizing it.
+- **Reserved usages verified on macOS only.** The Linux behavior comes
+  from the kernel source (`KEY_UNKNOWN`); it has not been tried on a
+  Linux host yet.
+- **Windows cannot read the keys yet.** Windows opens keyboard
+  collections exclusively, so hidapi cannot read the boot keyboard
+  interface, and Raw Input drops usages without a scan code such as
+  `0xA5`. The encoders (Consumer Control) are unaffected.
 - **RGB.** `Source.PaintInputs` only sets per-key colors under the
   user light effect; the other effects (breath, spectrum, …) are only
   reachable through probe. The colors persist on the device, so after a
@@ -517,9 +583,9 @@ or layout.
   prolonged re-plugs is pending — it has to land before bindings go
   into persistent storage in Fase 3.
 - **Cross-platform real seize.** `seize_linux.go` and
-  `seize_windows.go` are stubs (see §5.2 and §5.3). They will be
-  implemented when hardware is available on the corresponding
-  platform for testing.
+  `seize_windows.go` are stubs (see §5.2 and §5.3). With the reserved
+  layout the OS receives nothing it acts on, so seizing is no longer
+  needed to keep the keypad from triggering system actions.
 
 ---
 

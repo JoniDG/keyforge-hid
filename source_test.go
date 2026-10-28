@@ -675,9 +675,9 @@ func TestSideKeyboardKeypad_WhenProvisioned_ShouldEmitExactlyTheCatalogInputs(t 
 			continue
 		case vendor.SlotKeyboard:
 			report := []byte{slot.Codes[0], 0x00, slot.Codes[1], 0, 0, 0, 0, 0}
-			evs, err = events.NewKeyboardMapper(testDeviceID).Map(report)
+			evs, err = events.NewKeyboardMapper(testDeviceID, known.Codes.Keys).Map(report)
 		case vendor.SlotConsumer:
-			evs, err = events.NewEncoderMapper(testDeviceID).Map([]byte{0x03, slot.Codes[0], slot.Codes[1]})
+			evs, err = events.NewEncoderMapper(testDeviceID, known.Codes.Encoders).Map([]byte{0x03, slot.Codes[0], slot.Codes[1]})
 		default:
 			t.Fatalf("slot %d: unexpected type %s", i, slot)
 		}
