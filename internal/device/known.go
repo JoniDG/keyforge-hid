@@ -92,8 +92,11 @@ type VendorInterface struct {
 	Gamma float64
 	// Layout is what Source.Provision writes (one entry per slot) so
 	// every physical input emits a distinct code that Codes maps to
-	// Controls.
+	// Controls. PlatformLayout picks it everywhere but Windows.
 	Layout []vendor.Slot
+	// WindowsLayout replaces Layout on Windows, where keys must have a
+	// scan code for Raw Input to report them (see PlatformLayout).
+	WindowsLayout []vendor.Slot
 	// Factory is the out-of-the-box slot content, written back slot by
 	// slot to undo Layout without the firmware's factory-reset command.
 	Factory []vendor.Slot
@@ -195,6 +198,20 @@ var SideKeyboardKeypad = KnownDevice{
 			[3]vendor.Slot{vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009)},
 			[3]vendor.Slot{vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C)},
 		),
+		// F13–F22 have scan codes, so Raw Input reports them, and Windows
+		// binds no action to them. They keep their generic ids. On macOS
+		// and Linux they do trigger system actions, hence Layout there.
+		WindowsLayout: sideKeyboardSlots(
+			[10]vendor.Slot{
+				vendor.KeyboardSlot(0, 0x68), vendor.KeyboardSlot(0, 0x69),
+				vendor.KeyboardSlot(0, 0x6A), vendor.KeyboardSlot(0, 0x6B),
+				vendor.KeyboardSlot(0, 0x6C), vendor.KeyboardSlot(0, 0x6D),
+				vendor.KeyboardSlot(0, 0x6E), vendor.KeyboardSlot(0, 0x6F),
+				vendor.KeyboardSlot(0, 0x70), vendor.KeyboardSlot(0, 0x71),
+			},
+			[3]vendor.Slot{vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009)},
+			[3]vendor.Slot{vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C)},
+		),
 		Factory: sideKeyboardSlots(
 			[10]vendor.Slot{
 				ctrlA, ctrlA, ctrlA, ctrlA, ctrlA,
@@ -204,6 +221,12 @@ var SideKeyboardKeypad = KnownDevice{
 			factoryEncoder,
 		),
 	},
+}
+
+// PlatformLayout returns the layout Source.Provision writes on the
+// current OS.
+func (v VendorInterface) PlatformLayout() []vendor.Slot {
+	return platformLayout(v)
 }
 
 var (

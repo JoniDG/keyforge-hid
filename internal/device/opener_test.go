@@ -76,12 +76,63 @@ func TestOpener_Open_WhenPathOpens_ShouldReturnUsableStream(t *testing.T) {
 		openPath: func(_ string) (hidDevice, error) { return fakeDev, nil },
 	}
 
-	stream, err := o.Open("/dev/hidraw0")
+	stream, err := o.Open(Info{Path: "/dev/hidraw0"})
 
 	require.NoError(t, err)
 	require.NotNil(t, stream)
 	assert.NoError(t, stream.Close())
 	assert.Equal(t, 1, fakeDev.closeCalls)
+}
+
+// stubInputStream is an InputStream that never delivers reports.
+type stubInputStream struct{}
+
+func (*stubInputStream) Read(ctx context.Context, _ func([]byte) error) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (*stubInputStream) Close() error { return nil }
+
+func TestOpener_Open_WhenKeyboardOpenerSet_ShouldRouteOnlyKeyboardsToIt(t *testing.T) {
+	t.Parallel()
+	keyboardStream := &stubInputStream{}
+	var keyboardPaths, hidapiPaths []string
+	o := &hidOpener{
+		mode: sharedNoopMode(),
+		openPath: func(path string) (hidDevice, error) {
+			hidapiPaths = append(hidapiPaths, path)
+			return &fakeHIDDevice{}, nil
+		},
+		openKeyboard: func(path string) (InputStream, error) {
+			keyboardPaths = append(keyboardPaths, path)
+			return keyboardStream, nil
+		},
+	}
+
+	kb, err := o.Open(Info{Path: "kb", UsagePage: 0x0001, Usage: 0x0006})
+	require.NoError(t, err)
+	_, err = o.Open(Info{Path: "cc", UsagePage: 0x000c, Usage: 0x0001})
+	require.NoError(t, err)
+
+	assert.Same(t, keyboardStream, kb)
+	assert.Equal(t, []string{"kb"}, keyboardPaths)
+	assert.Equal(t, []string{"cc"}, hidapiPaths)
+}
+
+func TestOpener_Open_WhenKeyboardOpenerFails_ShouldWrapErrOpen(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("raw input unavailable")
+	o := &hidOpener{
+		mode:         sharedNoopMode(),
+		openKeyboard: func(string) (InputStream, error) { return nil, cause },
+	}
+
+	stream, err := o.Open(Info{Path: "kb", UsagePage: 0x0001, Usage: 0x0006})
+
+	assert.Nil(t, stream)
+	assert.ErrorIs(t, err, ErrOpen)
+	assert.ErrorIs(t, err, cause)
 }
 
 func TestOpener_Open_WhenPathFails_ShouldWrapErrOpen(t *testing.T) {
@@ -92,7 +143,7 @@ func TestOpener_Open_WhenPathFails_ShouldWrapErrOpen(t *testing.T) {
 		openPath: func(_ string) (hidDevice, error) { return nil, cause },
 	}
 
-	stream, err := o.Open("missing")
+	stream, err := o.Open(Info{Path: "missing"})
 
 	require.Error(t, err)
 	assert.Nil(t, stream)
@@ -116,7 +167,7 @@ func TestOpener_Open_WhenInitFails_ShouldWrapErrInitWithoutOpening(t *testing.T)
 		},
 	}
 
-	stream, err := o.Open("/dev/hidraw0")
+	stream, err := o.Open(Info{Path: "/dev/hidraw0"})
 
 	require.Error(t, err)
 	assert.Nil(t, stream)
@@ -131,7 +182,7 @@ func TestOpener_Open_WhenSharedRequested_ShouldApplyModeAfterInitAndBeforeOpen(t
 	f := &fakeDarwinHIDAPI{}
 	o := newOpenerFromFake(f, false)
 
-	_, err := o.Open("DevSrvsID:0001")
+	_, err := o.Open(Info{Path: "DevSrvsID:0001"})
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"init", "apply", "init", "open"}, f.calls)
@@ -147,7 +198,7 @@ func TestOpener_Open_WhenEnumeratedAfterSharedRequest_ShouldStillOpenShared(t *t
 	// Same order as Source.Stream: enumerate (Init/Exit), then open.
 	_, err := e.List(context.Background())
 	require.NoError(t, err)
-	_, err = o.Open("DevSrvsID:0001")
+	_, err = o.Open(Info{Path: "DevSrvsID:0001"})
 	require.NoError(t, err)
 
 	assert.Equal(t, []bool{false}, f.openedWith, "an Init/Exit cycle before the open must not turn a shared open into a seize")
@@ -158,7 +209,7 @@ func TestOpener_Open_WhenSeizeRequested_ShouldOpenExclusive(t *testing.T) {
 	f := &fakeDarwinHIDAPI{}
 	o := newOpenerFromFake(f, true)
 
-	_, err := o.Open("DevSrvsID:0001")
+	_, err := o.Open(Info{Path: "DevSrvsID:0001"})
 
 	require.NoError(t, err)
 	assert.Equal(t, []bool{true}, f.openedWith)

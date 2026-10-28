@@ -93,7 +93,8 @@ type stubOpener struct {
 	calls   []string
 }
 
-func (o *stubOpener) Open(path string) (device.InputStream, error) {
+func (o *stubOpener) Open(info device.Info) (device.InputStream, error) {
+	path := info.Path
 	o.mu.Lock()
 	o.calls = append(o.calls, path)
 	o.mu.Unlock()
@@ -552,7 +553,7 @@ func TestProvision_WhenVendorInterfaceEnumerated_ShouldApplyKeyForgeLayout(t *te
 	require.NoError(t, err)
 	assert.Equal(t, "vendor", *path)
 	assert.Equal(t, vendor.Limits{Slots: 22, LEDs: 10}, *limits)
-	assert.Equal(t, device.SideKeyboardKeypad.Vendor.Layout, applier.applied)
+	assert.Equal(t, device.SideKeyboardKeypad.Vendor.PlatformLayout(), applier.applied)
 	assert.Equal(t, 1, applier.closeCalls)
 }
 
@@ -665,9 +666,18 @@ func TestProvision_WhenContextCancelledDuringApply_ShouldWrapCtxErrAndStillClose
 func TestSideKeyboardKeypad_WhenProvisioned_ShouldEmitExactlyTheCatalogInputs(t *testing.T) {
 	t.Parallel()
 	known := device.SideKeyboardKeypad
+	for name, layout := range map[string][]vendor.Slot{"Layout": known.Vendor.Layout, "WindowsLayout": known.Vendor.WindowsLayout} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertLayoutEmitsCatalog(t, known, layout)
+		})
+	}
+}
 
+func assertLayoutEmitsCatalog(t *testing.T, known device.KnownDevice, layout []vendor.Slot) {
+	t.Helper()
 	emitted := map[string]bool{}
-	for i, slot := range known.Vendor.Layout {
+	for i, slot := range layout {
 		var evs []protocol.InputEvent
 		var err error
 		switch slot.Type {
