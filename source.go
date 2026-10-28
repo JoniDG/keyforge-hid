@@ -186,8 +186,9 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	return nil
 }
 
-// Provision writes the KeyForge input layout to the recognized keypad
-// so every key and encoder emits a distinct code, matching the input
+// Provision writes the KeyForge input layout for the current OS
+// (device.VendorInterface.PlatformLayout) to the recognized keypad so
+// every key and encoder emits a distinct code, matching the input
 // catalog DiscoverDevice reports. The layout persists on the device and
 // only slots that differ are written, so calling Provision on an
 // already provisioned keypad changes nothing. It returns
@@ -216,7 +217,7 @@ func (s *Source) Provision(ctx context.Context) error {
 	}
 	spec := r.target.Known.Vendor
 	return s.withVendor(ctx, "hid.Provision", path, spec, func(c vendorClient) error {
-		_, err := c.ApplySlots(ctx, spec.Layout)
+		_, err := c.ApplySlots(ctx, spec.PlatformLayout())
 		return err
 	})
 }

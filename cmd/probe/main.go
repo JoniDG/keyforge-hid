@@ -216,7 +216,7 @@ func streamSingleInterface(target device.IdentifiedDevice, emitEvents bool, usag
 		return fmt.Errorf("probe: %w", err)
 	}
 
-	stream, err := device.NewOpener().Open(iface.Path)
+	stream, err := device.NewOpener().Open(iface)
 	if err != nil {
 		return fmt.Errorf("probe: %w", err)
 	}
@@ -339,7 +339,7 @@ func runVendor(identified []device.IdentifiedDevice, req vendorRequest) error {
 	defer stop()
 
 	if req.provision || req.factoryLayout {
-		name, layout := "KeyForge", target.Known.Vendor.Layout
+		name, layout := "KeyForge", target.Known.Vendor.PlatformLayout()
 		if req.factoryLayout {
 			name, layout = "factory", target.Known.Vendor.Factory
 		}

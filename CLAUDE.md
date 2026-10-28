@@ -1,9 +1,11 @@
 # CLAUDE.md — keyforge-hid
 
 ## Objetivo
+
 Capa de hardware: enumera dispositivos HID conectados, los identifica por VID/PID y emite eventos de input (press/release/encoder) hacia los consumers (typically `keyforge-core`).
 
 ## Scope
+
 - Detección y enumeración de dispositivos HID.
 - Lectura de input reports de un dispositivo target.
 - Emisión de `InputEvent` (estructura del schema en `keyforge-protocol`).
@@ -11,12 +13,14 @@ Capa de hardware: enumera dispositivos HID conectados, los identifica por VID/PI
 - Driver de la interface vendor del keypad (`internal/vendor/`): leer/escribir qué código emite cada input físico, efecto de luz y color por tecla.
 
 **Fuera de scope:**
+
 - No conoce bindings, perfiles ni acciones (eso es `keyforge-core`).
 - No habla WebSocket (eso es responsabilidad del daemon en `keyforge-core`).
 - Qué acción dispara cada código que emite un input (eso es `keyforge-core`).
 - Colores por perfil, repintado al cambiar de perfil y `set_input_color`: son de core. Acá vive `Source.PaintInputs` (input id → color, hardware-agnóstico hacia afuera) y el driver de bajo nivel del keypad.
 
 ## Stack
+
 - Go 1.24
 - `github.com/karalabe/hid` (HID cross-platform) — a evaluar `github.com/sstallion/go-hid` como alternativa cuando arranquemos.
 - testify (tests)
@@ -24,6 +28,7 @@ Capa de hardware: enumera dispositivos HID conectados, los identifica por VID/PI
 - golangci-lint, siempre la **última release** (decisión del owner): CI usa `version: latest` y `make lint` compara la instalada con la última de GitHub (sin red avisa y corre igual). Un salto de versión mayor (v3) puede romper CI hasta migrar `.golangci.yml` y, probablemente, subir también `golangci-lint-action`.
 
 ## Layout
+
 ```
 source.go              → API pública (package hid): Discover() + Stream(), envuelve el pipeline interno
 cmd/probe/main.go      → binario chiquito para probar detección y eventos en consola
@@ -34,6 +39,7 @@ internal/
 ```
 
 ## API pública
+
 El package raíz `hid` (`github.com/JoniDG/keyforge-hid`) es la única superficie importable por otros módulos (p.ej. `keyforge-core`). `internal/` no es importable desde afuera por diseño.
 
 - `hid.New(opts ...Option) *Source` — wirea el pipeline real (enumerator + identifier con `DefaultRegistry` + opener).
@@ -45,13 +51,16 @@ El package raíz `hid` (`github.com/JoniDG/keyforge-hid`) es la única superfici
 - Serialización vendor: `Provision` y `PaintInputs` toman un semáforo por `Source` durante toda la sesión vendor (el `vendor.Client` no es concurrency-safe); esperar el semáforo respeta `ctx`. Core tiene que usar **un único `Source`** para que la serialización aplique.
 - Sentinelas de fallos vendor (envueltos por `Provision` y `PaintInputs`): `ErrVendorOpen`, `ErrVendorWrite`, `ErrVendorRead`, `ErrVendorNoAck` (alias de los de `internal/vendor`).
 - `Source.Stream(ctx, func(protocol.InputEvent) error) error` — bloquea hasta cancelación del ctx (devuelve `nil`), error del sink, o fallo de un reader (ambos se propagan).
-- **Layout mudo (decisión 2026-10-28).** La config del keypad vive en la PC (modelo Stream Deck): con KeyForge cada input hace solo lo que el usuario bindea, y el SO no hace nada. El layout usa usages **reservados** por las HID Usage Tables: teclas en teclado `0xA5`–`0xAE` (sin modificadores), encoders en Consumer `0x0007`–`0x000C`. Linux los mapea a `KEY_UNKNOWN` (código del kernel) y macOS los ignora (probado en hardware); KeyForge igual los lee de los reports crudos. Las teclas van por el reporte de teclado (hasta 6 a la vez) y no por Consumer, que lleva un solo usage y manda `00 00` al soltar cualquier input (dos teclas mantenidas no se distinguen al soltar). **No se restaura a fábrica al cerrar** (el firmware no tiene escrituras volátiles): en una PC sin KeyForge el keypad provisionado no hace nada, y eso es intencional. Con este layout el seize deja de hacer falta. Windows no puede leer las teclas así (abre los teclados en exclusiva y Raw Input descarta usages sin scan code): pendiente, ver doc §7.
+- **Layout mudo (decisión 2026-10-28).** La config del keypad vive en la PC (modelo Stream Deck): con KeyForge cada input hace solo lo que el usuario bindea, y el SO no hace nada. El layout usa usages **reservados** por las HID Usage Tables: teclas en teclado `0xA5`–`0xAE` (sin modificadores), encoders en Consumer `0x0007`–`0x000C`. Linux los mapea a `KEY_UNKNOWN` (código del kernel) y macOS los ignora (probado en hardware); KeyForge igual los lee de los reports crudos. Las teclas van por el reporte de teclado (hasta 6 a la vez) y no por Consumer, que lleva un solo usage y manda `00 00` al soltar cualquier input (dos teclas mantenidas no se distinguen al soltar). **No se restaura a fábrica al cerrar** (el firmware no tiene escrituras volátiles): en una PC sin KeyForge el keypad provisionado no hace nada, y eso es intencional. Con este layout el seize deja de hacer falta. **Windows** no puede leer esas teclas (abre los teclados en exclusiva y Raw Input descarta usages sin scan code), así que ahí `Provision` escribe `Vendor.WindowsLayout` (teclas en F13–F22, que Windows no usa; encoders iguales) vía `VendorInterface.PlatformLayout()`, y el opener lee las interfaces de teclado con Raw Input (`internal/device/rawinput_windows.go`) armando reportes boot para el `KeyboardMapper` de siempre. **⚠ Implementado pero NO validado en hardware Windows: retomar desde la checklist del doc §5.3.**
 - `WithSeize(bool)` — opción de seize; **default `false`** (sin privilegios). Con `true`, `Stream` falla si la plataforma no soporta seize en vez de degradar a shared en silencio: el error envuelve `hid.ErrSeizeNotImplemented` (alias de `device.ErrSeizeNotImplemented`) para que core lo distinga con `errors.Is` y reintente en shared.
 - `hid.SeizeSupport() (supported bool, note string)` — si el build actual acepta `WithSeize(true)` (no falla con `ErrSeizeNotImplemented`), más una nota de una línea para logs/UI.
+
+`device.Opener.Open` recibe la `Info` (no solo el path) para rutear por usage: en Windows las interfaces `0001:0006` van por Raw Input.
 
 Los seams (`enumerator`/`identifier`/`opener`/`setSeize`/`openVendor`) son inyectables vía fields no exportados para que los tests corran sin hidapi/cgo (CI no tiene hardware).
 
 ## Comandos
+
 ```bash
 make build    # compila cmd/probe
 make test     # unit tests con coverage
@@ -61,9 +70,17 @@ make lint-install  # instala la última release de golangci-lint en $(go env GOP
 make probe    # corre cmd/probe (detecta y prints eventos)
 ```
 
+CI corre en Linux, así que nada compila los archivos `//go:build windows`. Después de tocarlos, verificarlos desde macOS con `mingw-w64` (`brew install mingw-w64`):
+
+```bash
+export CC=x86_64-w64-mingw32-gcc CGO_ENABLED=1 GOOS=windows GOARCH=amd64  # en una subshell o terminal aparte
+go build ./... && go vet ./... && "$(go env GOPATH)/bin/golangci-lint" run ./...
+```
+
 `probe` también habla con la interface vendor (sin `sudo` en macOS): `-provision` escribe el layout KeyForge y `-factory-layout` lo deshace (vuelve a `Ctrl+A` en todas las teclas), `-vendor-slots` lee los slots de input de la capa 0, `-vendor-slot SLOT=TT:C1C2C3[,...]` escribe slots sueltos (hex; para experimentos, dentro de los índices verificados), `-vendor-effect <off|static|breath|trigger|spectrum|user>` cambia el efecto de luz, `-vendor-color LED:RRGGBB` prende una tecla (pasa el efecto a `user` primero) y `-paint 'key_0x68=#ff0000,...'` pinta por input id vía `Source.PaintInputs` (lo mismo que llama core). Los cambios persisten en el keypad; `-vendor-effect spectrum` vuelve al arcoíris de fábrica.
 
 ### Driver vendor (`internal/vendor/`)
+
 - Protocolo documentado en `docs/hid-device-keyforge-keypad.md` §4.3.
 - **Regla dura:** el paquete solo arma los 4 comandos verificados (leer/escribir slot, efecto, color). **No** implementar el factory reset (`06 0F FF`) ni la entrada al bootloader (`5A A0`), ni exportar un "send raw". Un test lo verifica.
 - Escribir slots es persistente en el device: cualquier cambio de mapeo tiene que poder revertirse escribiendo los valores de fábrica slot por slot.
@@ -74,30 +91,36 @@ make probe    # corre cmd/probe (detecta y prints eventos)
 ## Reglas duras
 
 ### Identidad del owner
+
 - 👤 **Identidad del owner:**
   - LICENSE / copyright / contacto público: **Jonathan Daniel Gomez** / `jonathan.d.gomez98@gmail.com`
   - Commits / GitHub: **JoniDG** / `jonathan.d.gomez98+github@gmail.com`
 - 🚨 **Antes de cada commit y push:** verificar `git config user.name` = `JoniDG` y `git config user.email` = `jonathan.d.gomez98+github@gmail.com`.
 
 ### Tipado
+
 - ❌ **Prohibido** `interface{}` y `any`. El linter `forbidigo` lo rechaza.
 - Si necesitás polimorfismo → interface concreta con métodos tipados.
 
 ### Tests
+
 - Coverage **mínimo 95%** en `internal/`. Target: ~100%.
 - `cmd/` queda excluido (entrypoints triviales).
 - Framework: `testify`. Naming: `Test<Type>_<Method>_When<Condition>_Should<Result>`.
 - Mocks: `mockery` en subpaquetes `mocks/`.
 
 ### Capas
+
 - `device/` no conoce `events/` ni viceversa salvo vía interfaces explícitas.
 - `cmd/probe/main.go` solo hace wiring — sin lógica.
 
 ### Errores
+
 - Wrapping obligatorio: `fmt.Errorf("device.Open: %w", err)`.
 - Errores centinela en `internal/device/errors.go` cuando aparezcan.
 
 ### Cross-platform
+
 - Cualquier código OS-specific va en archivos con build tags (`//go:build linux`, etc).
 - Tests deben pasar en al menos uno de los 3 SOs sin requerir hardware específico (usar mocks).
 

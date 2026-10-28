@@ -83,7 +83,7 @@ Out of the box the reference keypad sends `Ctrl+A` from every key and the same v
 ./bin/probe -factory-layout            # undo it (Ctrl+A keys, volume/mute encoders)
 ```
 
-Verified on macOS. On Linux the codes map to `KEY_UNKNOWN` (kernel source, not tried on a host yet). On Windows the keys cannot be read yet: Windows opens keyboards exclusively and Raw Input drops usages without a scan code (see [Known limitations](docs/hid-device-keyforge-keypad.md#7-known-limitations-and-open-follow-ups)).
+Verified on macOS. On Linux the codes map to `KEY_UNKNOWN` (kernel source, not tried on a host yet). On Windows, where keys need a scan code to be read, the keys use F13–F22 instead (Windows binds no action to them) and are read through Raw Input; this is implemented but not yet validated on Windows hardware (see [Windows notes](docs/hid-device-keyforge-keypad.md#53-windows-implemented-not-validated-on-hardware)).
 
 > **Heads-up for users:** once KeyForge has provisioned the keypad, it does nothing on a computer without KeyForge: the OS ignores its codes until KeyForge is installed there, the user maps the codes with their own tools, or the factory layout is written back.
 
@@ -104,7 +104,7 @@ Reading raw HID reports from a keyboard-class interface can require elevated pri
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **macOS**   | Shared mode (`-shared`, or the library default `WithSeize(false)`) needs no `sudo`; grant **Input Monitoring** to your terminal if the open is rejected: _System Settings → Privacy & Security → Input Monitoring → +_ and add `Terminal.app` (or iTerm, Warp, etc.), then restart the terminal session. Seizing a keyboard interface needs `sudo`. |
 | **Linux**   | Either run as `root` or add a udev rule that grants your user access to `/dev/hidraw*` for the device's VID/PID. The keypad's VID/PID is `0x6d82`/`0xdc83`.                                                                                                                                                                                         |
-| **Windows** | Standard user permissions are usually enough for reading HID; opening with exclusive access (planned for a later phase) needs admin.                                                                                                                                                                                                                |
+| **Windows** | No extra permissions: the encoders are read through hidapi and the keys through Raw Input, which needs the process to run in the logged-in user's session (not as a service). |
 
 Once the keypad is provisioned the OS receives only reserved codes it ignores, so there is no need to seize it.
 

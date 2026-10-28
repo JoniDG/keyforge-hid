@@ -71,7 +71,8 @@ type stubOpener struct {
 	calls   []string
 }
 
-func (o *stubOpener) Open(path string) (device.InputStream, error) {
+func (o *stubOpener) Open(info device.Info) (device.InputStream, error) {
+	path := info.Path
 	o.mu.Lock()
 	o.calls = append(o.calls, path)
 	o.mu.Unlock()
