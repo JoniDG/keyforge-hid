@@ -12,13 +12,13 @@
 
 `keyforge-hid` uses [`sstallion/go-hid`](https://github.com/sstallion/go-hid), which wraps the `hidapi` C library. You need a C toolchain (cgo, enabled by default) and `hidapi` installed on your build host:
 
-| Platform         | Install                                       |
-| ---------------- | --------------------------------------------- |
-| macOS (Homebrew) | `brew install hidapi`                         |
-| Debian / Ubuntu  | `sudo apt install libhidapi-dev libudev-dev`  |
-| Arch Linux       | `sudo pacman -S hidapi`                       |
-| Fedora           | `sudo dnf install hidapi-devel systemd-devel` |
-| Windows (MSYS2)  | `pacman -S mingw-w64-x86_64-{gcc,hidapi}`     |
+| Platform | Install |
+|---|---|
+| macOS (Homebrew) | `brew install hidapi` |
+| Debian / Ubuntu | `sudo apt install libhidapi-dev libudev-dev` |
+| Arch Linux | `sudo pacman -S hidapi` |
+| Fedora | `sudo dnf install hidapi-devel systemd-devel` |
+| Windows (MSYS2) | `pacman -S mingw-w64-x86_64-{gcc,hidapi}` |
 
 On Linux, `libudev-dev` (or `systemd-devel`) is required because `sstallion/go-hid` vendors hidapi's hidraw backend, which depends on libudev for device enumeration.
 
@@ -72,20 +72,16 @@ make build && ./bin/probe -stream -events | jq
 {"action":"release","device_id":"VID_6D82_PID_DC83","input_id":"mod_lctrl","kind":"key","timestamp_ms":1746662400245}
 ```
 
-`input_id` comes from the device's code table: a provisioned keypad reports the catalog ids (`key_0x68`…`key_0x71`, `encoder_0`, `encoder_1`). Codes outside the table fall back to the HID byte: `mod_<name>` for the modifier byte (left/right ctrl/shift/alt/meta), `key_0x<hex>` for keycodes from the boot keyboard report. Encoder events come from the Consumer Control interface with `click`, `rotate_cw` or `rotate_ccw`.
+`input_id` is derived from the HID byte: `mod_<name>` for the modifier byte (left/right ctrl/shift/alt/meta), `key_0x<hex>` for keycodes from the boot keyboard report. Encoder events come from the Consumer Control interface as `encoder_0` / `encoder_1` with `click`, `rotate_cw` or `rotate_ccw`.
 
 #### Telling the keys and encoders apart
 
-Out of the box the reference keypad sends `Ctrl+A` from every key and the same volume/mute events from both encoders. Provision it once so each input emits its own code. The codes are HID usages reserved by the spec, so no OS acts on them: KeyForge reads every key and encoder, and the OS does nothing with them, without seizing the device. The change persists on the device and needs no `sudo`:
+Out of the box the reference keypad sends `Ctrl+A` from every key and the same volume/mute events from both encoders. Provision it once so each input emits its own code (F13–F22 for the keys, distinct media usages for the second encoder). The change persists on the device and needs no `sudo`:
 
 ```bash
 ./bin/probe -provision -vendor-slots   # write the KeyForge layout and show it
-./bin/probe -factory-layout            # undo it (Ctrl+A keys, volume/mute encoders)
+./bin/probe -factory-layout            # undo it
 ```
-
-Verified on macOS. On Linux the codes map to `KEY_UNKNOWN` (kernel source, not tried on a host yet). On Windows, where keys need a scan code to be read, the keys use F13–F22 instead (Windows binds no action to them) and are read through Raw Input; this is implemented but not yet validated on Windows hardware (see [Windows notes](docs/hid-device-keyforge-keypad.md#53-windows-implemented-not-validated-on-hardware)).
-
-> **Heads-up for users:** once KeyForge has provisioned the keypad, it does nothing on a computer without KeyForge: the OS ignores its codes until KeyForge is installed there, the user maps the codes with their own tools, or the factory layout is written back.
 
 See [the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout) for the full layout.
 
@@ -100,13 +96,13 @@ To light keys, paint them by input id (works while another process streams the k
 
 Reading raw HID reports from a keyboard-class interface can require elevated privileges, depending on the OS and on whether the device is seized. Without them, `-stream` fails with a permission error before the first read.
 
-| Platform    | What you need                                                                                                                                                                                                                                                                                                                                       |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **macOS**   | Shared mode (`-shared`, or the library default `WithSeize(false)`) needs no `sudo`; grant **Input Monitoring** to your terminal if the open is rejected: _System Settings → Privacy & Security → Input Monitoring → +_ and add `Terminal.app` (or iTerm, Warp, etc.), then restart the terminal session. Seizing a keyboard interface needs `sudo`. |
-| **Linux**   | Either run as `root` or add a udev rule that grants your user access to `/dev/hidraw*` for the device's VID/PID. The keypad's VID/PID is `0x6d82`/`0xdc83`.                                                                                                                                                                                         |
-| **Windows** | No extra permissions: the encoders are read through hidapi and the keys through Raw Input, which needs the process to run in the logged-in user's session (not as a service). |
+| Platform | What you need |
+|---|---|
+| **macOS** | Shared mode (`-shared`, or the library default `WithSeize(false)`) needs no `sudo`; grant **Input Monitoring** to your terminal if the open is rejected: *System Settings → Privacy & Security → Input Monitoring → +* and add `Terminal.app` (or iTerm, Warp, etc.), then restart the terminal session. Seizing a keyboard interface needs `sudo`. |
+| **Linux** | Either run as `root` or add a udev rule that grants your user access to `/dev/hidraw*` for the device's VID/PID. The keypad's VID/PID is `0x6d82`/`0xdc83`. |
+| **Windows** | Standard user permissions are usually enough for reading HID; opening with exclusive access (planned for a later phase) needs admin. |
 
-Once the keypad is provisioned the OS receives only reserved codes it ignores, so there is no need to seize it.
+Hijacking the keystrokes so the OS does not also receive them is a separate concern, tracked as a TBD in the project plan and resolved in a later phase.
 
 ## Using it as a library
 
@@ -115,8 +111,8 @@ recognized keypad (and the `DeviceID` its events will carry) before streaming;
 `DiscoverDevice` returns the same device as a fully populated
 `protocol.Device` (VID/PID, path, and the logical input catalog) so a consumer
 can persist and describe it without opening it; `Provision` writes the KeyForge
-input layout to the keypad so every key and encoder emits a distinct code that
-no OS acts on (the catalog describes the provisioned keypad; see
+input layout to the keypad so every key and encoder emits a distinct code (the
+catalog describes the provisioned keypad; see
 [the device doc](docs/hid-device-keyforge-keypad.md#21-keyforge-layout)),
 and gives up with the wrapped `ctx.Err()` once its context is cancelled or
 times out, so pass a short deadline if the keypad may not answer;
@@ -187,13 +183,13 @@ plus a one-line note for logs or UI.
 
 ## Layout
 
-| Path                        | Purpose                                                                  |
-| --------------------------- | ------------------------------------------------------------------------ |
+| Path | Purpose |
+|---|---|
 | `source.go` (package `hid`) | Public API: discover the recognized keypad and stream its decoded events |
-| `cmd/probe/main.go`         | CLI for manual device discovery and event inspection                     |
-| `internal/device/`          | Enumeration, identification, open/close lifecycle                        |
-| `internal/events/`          | Mapping from raw input reports to typed events                           |
-| `internal/vendor/`          | Driver for the keypad's vendor interface: input slots and RGB            |
+| `cmd/probe/main.go` | CLI for manual device discovery and event inspection |
+| `internal/device/` | Enumeration, identification, open/close lifecycle |
+| `internal/events/` | Mapping from raw input reports to typed events |
+| `internal/vendor/` | Driver for the keypad's vendor interface: input slots and RGB |
 
 ## Cross-platform support
 

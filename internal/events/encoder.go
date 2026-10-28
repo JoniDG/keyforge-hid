@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/JoniDG/keyforge-hid/internal/device"
 	"github.com/JoniDG/keyforge-protocol/go/protocol"
 )
 
@@ -18,6 +17,28 @@ const encoderReportLength = 3
 // the same physical USB interface on the reference keypad.
 const consumerControlReportID byte = 0x03
 
+// encoderInput is the logical encoder and action a Consumer Control
+// usage stands for.
+type encoderInput struct {
+	id     string
+	action protocol.InputAction
+}
+
+// encoderUsages maps the HID Consumer Control usages (USB HID Usage
+// Tables, Consumer Page 0x0c) the reference keypad's encoders emit.
+// Encoder 1 keeps the factory usages; the KeyForge layout written by
+// Source.Provision moves encoder 2 to media usages so the two can be
+// told apart. Under the factory mapping both encoders emit the encoder 1
+// usages and collapse into encoder_0.
+var encoderUsages = map[uint16]encoderInput{
+	0x00E2: {id: "encoder_0", action: protocol.InputActionClick},     // Mute
+	0x00E9: {id: "encoder_0", action: protocol.InputActionRotateCw},  // Volume Increment
+	0x00EA: {id: "encoder_0", action: protocol.InputActionRotateCcw}, // Volume Decrement
+	0x00CD: {id: "encoder_1", action: protocol.InputActionClick},     // Play/Pause
+	0x00B5: {id: "encoder_1", action: protocol.InputActionRotateCw},  // Scan Next Track
+	0x00B6: {id: "encoder_1", action: protocol.InputActionRotateCcw}, // Scan Previous Track
+}
+
 // EncoderMapper translates Consumer Control reports from a keypad's
 // encoder interface into protocol.InputEvent values. It is stateless
 // across reports (unlike KeyboardMapper): each detent of rotation and
@@ -26,7 +47,6 @@ const consumerControlReportID byte = 0x03
 // has usage=0 and falls through the "unknown usage" path silently.
 type EncoderMapper struct {
 	deviceID protocol.DeviceID
-	codes    map[uint16]device.InputCode
 	clock    func() time.Time
 }
 
@@ -40,12 +60,10 @@ func WithEncoderClock(clock func() time.Time) EncoderOption {
 }
 
 // NewEncoderMapper returns an EncoderMapper that emits InputEvents
-// tagged with the given device id for the usages in codes
-// (device.Codes.Encoders).
-func NewEncoderMapper(deviceID protocol.DeviceID, codes map[uint16]device.InputCode, opts ...EncoderOption) *EncoderMapper {
+// tagged with the given device id.
+func NewEncoderMapper(deviceID protocol.DeviceID, opts ...EncoderOption) *EncoderMapper {
 	m := &EncoderMapper{
 		deviceID: deviceID,
-		codes:    codes,
 		clock:    time.Now,
 	}
 	for _, opt := range opts {
@@ -69,15 +87,15 @@ func (m *EncoderMapper) Map(report []byte) ([]protocol.InputEvent, error) {
 	}
 
 	usage := uint16(report[1]) | uint16(report[2])<<8
-	in, ok := m.codes[usage]
+	in, ok := encoderUsages[usage]
 	if !ok {
 		return []protocol.InputEvent{}, nil
 	}
 
 	return []protocol.InputEvent{{
-		Action:      in.Action,
+		Action:      in.action,
 		DeviceId:    m.deviceID,
-		InputId:     in.ID,
+		InputId:     in.id,
 		Kind:        protocol.InputKindEncoder,
 		TimestampMs: int(m.clock().UnixMilli()),
 	}}, nil

@@ -30,7 +30,6 @@ var modifierNames = [8]string{
 // one. It is single-consumer and not safe for concurrent use.
 type KeyboardMapper struct {
 	deviceID protocol.DeviceID
-	keys     map[byte]string
 	clock    func() time.Time
 	prev     []byte
 }
@@ -45,14 +44,11 @@ func WithClock(clock func() time.Time) Option {
 }
 
 // NewKeyboardMapper returns a KeyboardMapper that emits InputEvents
-// tagged with the given device id. keys names the input behind each
-// usage (device.Codes.Keys); a usage it leaves out is reported as
-// key_0x<usage>. The first call to Map treats the previous report as all
-// zeros (no keys pressed).
-func NewKeyboardMapper(deviceID protocol.DeviceID, keys map[byte]string, opts ...Option) *KeyboardMapper {
+// tagged with the given device id. The first call to Map treats the
+// previous report as all zeros (no keys pressed).
+func NewKeyboardMapper(deviceID protocol.DeviceID, opts ...Option) *KeyboardMapper {
 	m := &KeyboardMapper{
 		deviceID: deviceID,
-		keys:     keys,
 		clock:    time.Now,
 		prev:     make([]byte, keyboardReportLength),
 	}
@@ -102,12 +98,12 @@ func (m *KeyboardMapper) appendKeycodeDiff(events []protocol.InputEvent, prev, c
 
 	released := sortedDiff(prevSet, currSet)
 	for _, code := range released {
-		events = append(events, m.newEvent(m.keyName(code), protocol.InputActionRelease, timestamp))
+		events = append(events, m.newEvent(keycodeName(code), protocol.InputActionRelease, timestamp))
 	}
 
 	pressed := sortedDiff(currSet, prevSet)
 	for _, code := range pressed {
-		events = append(events, m.newEvent(m.keyName(code), protocol.InputActionPress, timestamp))
+		events = append(events, m.newEvent(keycodeName(code), protocol.InputActionPress, timestamp))
 	}
 	return events
 }
@@ -148,9 +144,6 @@ func sortedDiff(a, b map[byte]struct{}) []byte {
 	return out
 }
 
-func (m *KeyboardMapper) keyName(code byte) string {
-	if id, ok := m.keys[code]; ok {
-		return id
-	}
+func keycodeName(code byte) string {
 	return fmt.Sprintf("key_0x%02x", code)
 }

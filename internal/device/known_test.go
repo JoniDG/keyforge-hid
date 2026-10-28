@@ -86,7 +86,6 @@ func TestSideKeyboardKeypad_DeclaresVendorInterface(t *testing.T) {
 		"key_0x6d", "key_0x6e", "key_0x6f", "key_0x70", "key_0x71",
 	}, v.LEDs)
 	assert.Len(t, v.Layout, v.Slots)
-	assert.Len(t, v.WindowsLayout, v.Slots)
 	assert.Len(t, v.Factory, v.Slots)
 }
 
@@ -95,45 +94,15 @@ func TestSideKeyboardKeypad_Layout_ShouldGiveEveryInputADistinctCode(t *testing.
 	layout := SideKeyboardKeypad.Vendor.Layout
 
 	for i := range 10 {
-		assert.Equal(t, vendor.KeyboardSlot(0x00, byte(0xA5+i)), layout[i], "key slot %d", i)
+		assert.Equal(t, vendor.KeyboardSlot(0x00, byte(0x68+i)), layout[i], "key slot %d should be F%d", i, 13+i)
 	}
 	for i := 10; i < 16; i++ {
 		assert.Equal(t, vendor.DisabledSlot(), layout[i], "slot %d", i)
 	}
 	assert.Equal(t, []vendor.Slot{
-		vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009), // encoder 1
-		vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C), // encoder 2
+		vendor.ConsumerSlot(0x00E2), vendor.ConsumerSlot(0x00E9), vendor.ConsumerSlot(0x00EA), // encoder 1
+		vendor.ConsumerSlot(0x00CD), vendor.ConsumerSlot(0x00B5), vendor.ConsumerSlot(0x00B6), // encoder 2
 	}, layout[16:22])
-}
-
-func TestSideKeyboardKeypad_WindowsLayout_ShouldPutKeysOnF13ToF22(t *testing.T) {
-	t.Parallel()
-	v := SideKeyboardKeypad.Vendor
-
-	for i := range 10 {
-		assert.Equal(t, vendor.KeyboardSlot(0x00, byte(0x68+i)), v.WindowsLayout[i], "key slot %d should be F%d", i, 13+i)
-	}
-	assert.Equal(t, v.Layout[10:], v.WindowsLayout[10:], "only the keys differ from Layout")
-}
-
-// No OS acts on reserved usages (HID Usage Tables: keyboard 0xA5–0xAF,
-// Consumer 0x07–0x1F), which is what keeps the keypad from doing anything
-// on its own; a code outside them would reach the OS as a real key.
-func TestSideKeyboardKeypad_Layout_ShouldOnlyUseReservedUsages(t *testing.T) {
-	t.Parallel()
-	for i, slot := range SideKeyboardKeypad.Vendor.Layout {
-		switch slot.Type {
-		case vendor.SlotDisabled:
-		case vendor.SlotKeyboard:
-			assert.Zero(t, slot.Codes[0], "slot %d must not press modifiers", i)
-			assert.True(t, slot.Codes[1] >= 0xA5 && slot.Codes[1] <= 0xAF, "slot %d: usage 0x%02x is not reserved", i, slot.Codes[1])
-		case vendor.SlotConsumer:
-			usage := uint16(slot.Codes[0]) | uint16(slot.Codes[1])<<8
-			assert.True(t, usage >= 0x07 && usage <= 0x1F, "slot %d: usage 0x%04x is not reserved", i, usage)
-		default:
-			t.Errorf("slot %d: unexpected type %s", i, slot)
-		}
-	}
 }
 
 func TestSideKeyboardKeypad_Factory_ShouldMatchOutOfTheBoxSlots(t *testing.T) {
