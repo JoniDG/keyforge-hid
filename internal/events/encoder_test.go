@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JoniDG/keyforge-hid/internal/device"
 	"github.com/JoniDG/keyforge-protocol/go/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +11,7 @@ import (
 
 func newTestEncoderMapper(t *testing.T, epochMs int64) *EncoderMapper {
 	t.Helper()
-	return NewEncoderMapper(testDeviceID, device.SideKeyboardKeypad.Codes.Encoders, WithEncoderClock(fixedClock(epochMs)))
+	return NewEncoderMapper(testDeviceID, WithEncoderClock(fixedClock(epochMs)))
 }
 
 func TestEncoderMapper_Map_OnReportShorterThanThreeBytes_ShouldReturnErrShortReport(t *testing.T) {
@@ -110,15 +109,12 @@ func TestEncoderMapper_Map_OnEachEncoderUsage_ShouldEmitItsEncoderAndAction(t *t
 		id     string
 		action protocol.InputAction
 	}{
-		{name: "encoder 1 click", usage: [2]byte{0x07, 0x00}, id: "encoder_0", action: protocol.InputActionClick},
-		{name: "encoder 1 cw", usage: [2]byte{0x08, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCw},
-		{name: "encoder 1 ccw", usage: [2]byte{0x09, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCcw},
-		{name: "encoder 2 click", usage: [2]byte{0x0A, 0x00}, id: "encoder_1", action: protocol.InputActionClick},
-		{name: "encoder 2 cw", usage: [2]byte{0x0B, 0x00}, id: "encoder_1", action: protocol.InputActionRotateCw},
-		{name: "encoder 2 ccw", usage: [2]byte{0x0C, 0x00}, id: "encoder_1", action: protocol.InputActionRotateCcw},
-		{name: "factory click (mute)", usage: [2]byte{0xE2, 0x00}, id: "encoder_0", action: protocol.InputActionClick},
-		{name: "factory cw (volume up)", usage: [2]byte{0xE9, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCw},
-		{name: "factory ccw (volume down)", usage: [2]byte{0xEA, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCcw},
+		{name: "encoder 1 click (mute)", usage: [2]byte{0xE2, 0x00}, id: "encoder_0", action: protocol.InputActionClick},
+		{name: "encoder 1 cw (volume up)", usage: [2]byte{0xE9, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCw},
+		{name: "encoder 1 ccw (volume down)", usage: [2]byte{0xEA, 0x00}, id: "encoder_0", action: protocol.InputActionRotateCcw},
+		{name: "encoder 2 click (play/pause)", usage: [2]byte{0xCD, 0x00}, id: "encoder_1", action: protocol.InputActionClick},
+		{name: "encoder 2 cw (next track)", usage: [2]byte{0xB5, 0x00}, id: "encoder_1", action: protocol.InputActionRotateCw},
+		{name: "encoder 2 ccw (previous track)", usage: [2]byte{0xB6, 0x00}, id: "encoder_1", action: protocol.InputActionRotateCcw},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,17 +130,6 @@ func TestEncoderMapper_Map_OnEachEncoderUsage_ShouldEmitItsEncoderAndAction(t *t
 			assert.Equal(t, protocol.InputKindEncoder, got[0].Kind)
 		})
 	}
-}
-
-func TestEncoderMapper_Map_WhenCodesNil_ShouldEmitNothing(t *testing.T) {
-	t.Parallel()
-	m := NewEncoderMapper(testDeviceID, nil)
-
-	got, err := m.Map([]byte{0x03, 0xE9, 0x00})
-
-	require.NoError(t, err)
-	assert.NotNil(t, got)
-	assert.Empty(t, got)
 }
 
 func TestEncoderMapper_Map_OnSixteenBitUsage_ShouldDecodeLittleEndian(t *testing.T) {
@@ -217,7 +202,7 @@ func TestEncoderMapper_Map_ShouldStampEventsWithCurrentClockReading(t *testing.T
 
 func TestNewEncoderMapper_WithoutOptions_ShouldUseRealClock(t *testing.T) {
 	t.Parallel()
-	m := NewEncoderMapper(testDeviceID, device.SideKeyboardKeypad.Codes.Encoders)
+	m := NewEncoderMapper(testDeviceID)
 
 	before := time.Now().UnixMilli()
 	got, err := m.Map([]byte{0x03, 0xE9, 0x00})

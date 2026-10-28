@@ -17,7 +17,7 @@ func fixedClock(epochMs int64) func() time.Time {
 
 func newTestMapper(t *testing.T, epochMs int64) *KeyboardMapper {
 	t.Helper()
-	return NewKeyboardMapper(testDeviceID, nil, WithClock(fixedClock(epochMs)))
+	return NewKeyboardMapper(testDeviceID, WithClock(fixedClock(epochMs)))
 }
 
 func TestKeyboardMapper_Map_OnReportShorterThanEightBytes_ShouldReturnErrShortReport(t *testing.T) {
@@ -188,30 +188,9 @@ func TestKeyboardMapper_Map_AcceptsReportsLongerThanEightBytes(t *testing.T) {
 	assert.Equal(t, "key_0x04", got[0].InputId)
 }
 
-func TestKeyboardMapper_Map_WhenUsageIsInKeys_ShouldUseItsInputID(t *testing.T) {
-	t.Parallel()
-	m := NewKeyboardMapper(testDeviceID, map[byte]string{0xA5: "key_0x68"}, WithClock(fixedClock(0)))
-
-	pressed, err := m.Map([]byte{0, 0, 0xA5, 0x04, 0, 0, 0, 0})
-	require.NoError(t, err)
-	released, err := m.Map([]byte{0, 0, 0, 0, 0, 0, 0, 0})
-	require.NoError(t, err)
-
-	ids := func(evs []protocol.InputEvent) []string {
-		out := make([]string, 0, len(evs))
-		for _, e := range evs {
-			out = append(out, string(e.Action)+" "+e.InputId)
-		}
-		return out
-	}
-	// 0x04 is not in keys, so it keeps its generic id.
-	assert.Equal(t, []string{"press key_0x04", "press key_0x68"}, ids(pressed))
-	assert.Equal(t, []string{"release key_0x04", "release key_0x68"}, ids(released))
-}
-
 func TestNewKeyboardMapper_WithoutOptions_ShouldUseRealClock(t *testing.T) {
 	t.Parallel()
-	m := NewKeyboardMapper(testDeviceID, nil)
+	m := NewKeyboardMapper(testDeviceID)
 
 	before := time.Now().UnixMilli()
 	got, err := m.Map([]byte{0, 0, 0x04, 0, 0, 0, 0, 0})

@@ -47,32 +47,9 @@ type KnownDevice struct {
 	// reflects what a user can meaningfully bind, not every interface.
 	// Each entry's Id matches the input_id the event mappers emit.
 	Controls []protocol.Input
-	// Codes translates the codes the device emits into Controls ids.
-	Codes Codes
 	// Vendor locates the device's configuration channel. The zero value
 	// means the device has none KeyForge can drive.
 	Vendor VendorInterface
-}
-
-// Codes maps what a device emits to the catalog inputs those codes stand
-// for. The event mappers read it, so an input id need not be derived from
-// the code behind it: the layout can move an input to another code
-// without renaming the input that bindings are keyed on.
-type Codes struct {
-	// Keys maps HID keyboard usages to key input ids. A usage left out is
-	// reported under its generic id, key_0x<usage>, which can coincide
-	// with a mapped id: a keypad still on F13–F22 (usage 0x68…) reports
-	// the same ids until it is provisioned again.
-	Keys map[byte]string
-	// Encoders maps Consumer Control usages to the encoder input and
-	// action they stand for. A usage left out is ignored.
-	Encoders map[uint16]InputCode
-}
-
-// InputCode is the catalog input and action one code stands for.
-type InputCode struct {
-	ID     string
-	Action protocol.InputAction
 }
 
 // VendorInterface declares a device's vendor-specific configuration
@@ -91,12 +68,8 @@ type VendorInterface struct {
 	// before they reach the LEDs; 0 writes them unchanged.
 	Gamma float64
 	// Layout is what Source.Provision writes (one entry per slot) so
-	// every physical input emits a distinct code that Codes maps to
-	// Controls. PlatformLayout picks it everywhere but Windows.
+	// every physical input emits a distinct code matching Controls.
 	Layout []vendor.Slot
-	// WindowsLayout replaces Layout on Windows, where keys must have a
-	// scan code for Raw Input to report them (see PlatformLayout).
-	WindowsLayout []vendor.Slot
 	// Factory is the out-of-the-box slot content, written back slot by
 	// slot to undo Layout without the firmware's factory-reset command.
 	Factory []vendor.Slot
@@ -125,13 +98,11 @@ func encoder(id string, x, y float64) protocol.Input {
 //     encoders.
 //
 // Out of the box every key emits Ctrl+A and both encoders emit the same
-// volume/mute usages, so the inputs are indistinguishable. Layout gives
-// every input its own code, picked from usages the HID Usage Tables leave
-// reserved so no OS acts on them: the keypad does nothing unless KeyForge
-// reads it. Controls describes the device after Source.Provision has
-// written Layout; see docs/hid-device-keyforge-keypad.md for the slot
-// map and the canonical orientation the layout is given in (horizontal,
-// encoders on the right, keys 1–5 on the top row). Entries carry no label: the GUI numbers them
+// volume/mute usages, so the inputs are indistinguishable. Controls
+// describes the device after Source.Provision has written Layout; see
+// docs/hid-device-keyforge-keypad.md for the slot map and the canonical
+// orientation the layout is given in (horizontal, encoders on the right,
+// keys 1–5 on the top row). Entries carry no label: the GUI numbers them
 // by position in whatever rotation the user picks.
 var SideKeyboardKeypad = KnownDevice{
 	VendorID:  0x6D82,
@@ -148,25 +119,6 @@ var SideKeyboardKeypad = KnownDevice{
 		encoder("encoder_0", 5.5, 0),
 		encoder("encoder_1", 5.5, 1),
 	},
-	Codes: Codes{
-		Keys: map[byte]string{
-			0xA5: "key_0x68", 0xA6: "key_0x69", 0xA7: "key_0x6a", 0xA8: "key_0x6b", 0xA9: "key_0x6c",
-			0xAA: "key_0x6d", 0xAB: "key_0x6e", 0xAC: "key_0x6f", 0xAD: "key_0x70", 0xAE: "key_0x71",
-		},
-		Encoders: map[uint16]InputCode{
-			0x0007: {ID: "encoder_0", Action: protocol.InputActionClick},
-			0x0008: {ID: "encoder_0", Action: protocol.InputActionRotateCw},
-			0x0009: {ID: "encoder_0", Action: protocol.InputActionRotateCcw},
-			0x000A: {ID: "encoder_1", Action: protocol.InputActionClick},
-			0x000B: {ID: "encoder_1", Action: protocol.InputActionRotateCw},
-			0x000C: {ID: "encoder_1", Action: protocol.InputActionRotateCcw},
-			// Factory mute/volume: until the keypad is provisioned both
-			// encoders emit these and collapse into encoder_0.
-			0x00E2: {ID: "encoder_0", Action: protocol.InputActionClick},
-			0x00E9: {ID: "encoder_0", Action: protocol.InputActionRotateCw},
-			0x00EA: {ID: "encoder_0", Action: protocol.InputActionRotateCcw},
-		},
-	},
 	// Slots 0–21 back the ten keys and the two encoders' click/CW/CCW;
 	// the firmware answers for slots past 21 but nothing is wired to
 	// them. Only the ten keys have LEDs, numbered like their slots.
@@ -181,69 +133,41 @@ var SideKeyboardKeypad = KnownDevice{
 		// Measured by eye against a screen on the reference keypad: 2.8
 		// still washed pastels out and 4.5 overshot (§4.3).
 		Gamma: 3.5,
-		// Keyboard usages 0xA5–0xAF and Consumer usages 0x07–0x1F are
-		// reserved: macOS ignores them (checked on hardware) and Linux maps
-		// them to KEY_UNKNOWN (kernel source, not tried on a host yet), yet
-		// they reach KeyForge in the raw reports. Keys stay on the keyboard report, which carries up to
-		// six held keys; the Consumer report carries one usage, so two
-		// keys held there could not be told apart on release.
 		Layout: sideKeyboardSlots(
 			[10]vendor.Slot{
-				vendor.KeyboardSlot(0, 0xA5), vendor.KeyboardSlot(0, 0xA6),
-				vendor.KeyboardSlot(0, 0xA7), vendor.KeyboardSlot(0, 0xA8),
-				vendor.KeyboardSlot(0, 0xA9), vendor.KeyboardSlot(0, 0xAA),
-				vendor.KeyboardSlot(0, 0xAB), vendor.KeyboardSlot(0, 0xAC),
-				vendor.KeyboardSlot(0, 0xAD), vendor.KeyboardSlot(0, 0xAE),
+				vendor.KeyboardSlot(0, 0x68), vendor.KeyboardSlot(0, 0x69), // F13, F14
+				vendor.KeyboardSlot(0, 0x6A), vendor.KeyboardSlot(0, 0x6B), // F15, F16
+				vendor.KeyboardSlot(0, 0x6C), vendor.KeyboardSlot(0, 0x6D), // F17, F18
+				vendor.KeyboardSlot(0, 0x6E), vendor.KeyboardSlot(0, 0x6F), // F19, F20
+				vendor.KeyboardSlot(0, 0x70), vendor.KeyboardSlot(0, 0x71), // F21, F22
 			},
-			[3]vendor.Slot{vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009)},
-			[3]vendor.Slot{vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C)},
-		),
-		// F13–F22 have scan codes, so Raw Input reports them, and Windows
-		// binds no action to them. They keep their generic ids. On macOS
-		// and Linux they do trigger system actions, hence Layout there.
-		WindowsLayout: sideKeyboardSlots(
-			[10]vendor.Slot{
-				vendor.KeyboardSlot(0, 0x68), vendor.KeyboardSlot(0, 0x69),
-				vendor.KeyboardSlot(0, 0x6A), vendor.KeyboardSlot(0, 0x6B),
-				vendor.KeyboardSlot(0, 0x6C), vendor.KeyboardSlot(0, 0x6D),
-				vendor.KeyboardSlot(0, 0x6E), vendor.KeyboardSlot(0, 0x6F),
-				vendor.KeyboardSlot(0, 0x70), vendor.KeyboardSlot(0, 0x71),
-			},
-			[3]vendor.Slot{vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009)},
-			[3]vendor.Slot{vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C)},
+			// Encoder 2 moves to media usages so it is told apart from
+			// encoder 1 while still doing something sensible without
+			// KeyForge running.
+			[3]vendor.Slot{vendor.ConsumerSlot(0x00CD), vendor.ConsumerSlot(0x00B5), vendor.ConsumerSlot(0x00B6)},
 		),
 		Factory: sideKeyboardSlots(
 			[10]vendor.Slot{
 				ctrlA, ctrlA, ctrlA, ctrlA, ctrlA,
 				ctrlA, ctrlA, ctrlA, ctrlA, ctrlA,
 			},
-			factoryEncoder,
-			factoryEncoder,
+			[3]vendor.Slot{vendor.ConsumerSlot(0x00E2), vendor.ConsumerSlot(0x00E9), vendor.ConsumerSlot(0x00EA)},
 		),
 	},
 }
 
-// PlatformLayout returns the layout Source.Provision writes on the
-// current OS.
-func (v VendorInterface) PlatformLayout() []vendor.Slot {
-	return platformLayout(v)
-}
-
-var (
-	ctrlA          = vendor.KeyboardSlot(0x01, 0x04)
-	factoryEncoder = [3]vendor.Slot{vendor.ConsumerSlot(0x00E2), vendor.ConsumerSlot(0x00E9), vendor.ConsumerSlot(0x00EA)}
-)
+var ctrlA = vendor.KeyboardSlot(0x01, 0x04)
 
 // sideKeyboardSlots assembles the keypad's 22 slots: keys in slots 0–9,
-// slots 10–15 disabled, encoder 1 (click/CW/CCW) in 16–18 and encoder 2
-// in 19–21.
-func sideKeyboardSlots(keys [10]vendor.Slot, encoder1, encoder2 [3]vendor.Slot) []vendor.Slot {
+// slots 10–15 disabled, encoder 1 (click/CW/CCW) in 16–18 with the
+// factory volume usages it keeps in every layout, and encoder 2 in 19–21.
+func sideKeyboardSlots(keys [10]vendor.Slot, encoder2 [3]vendor.Slot) []vendor.Slot {
 	slots := make([]vendor.Slot, 0, 22)
 	slots = append(slots, keys[:]...)
 	for range 6 {
 		slots = append(slots, vendor.DisabledSlot())
 	}
-	slots = append(slots, encoder1[:]...)
+	slots = append(slots, vendor.ConsumerSlot(0x00E2), vendor.ConsumerSlot(0x00E9), vendor.ConsumerSlot(0x00EA))
 	return append(slots, encoder2[:]...)
 }
 
