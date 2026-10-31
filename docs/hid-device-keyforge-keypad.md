@@ -278,6 +278,15 @@ c0
   accepts a reply whose echo matches the packet it sent (slot reads
   echo just the offset in bytes 3–4).
 - No checksum. Unused bytes are zero-padded to 64.
+- **One command at a time.** The keypad rejects a report that arrives
+  while it is still handling another one: on macOS
+  `IOHIDDeviceSetReport` fails at once with `0xE00002BC` (general
+  error). Within one process that cannot happen, because every command
+  waits for its ack, but two processes driving the interface at the
+  same time collide (reproduced with two concurrent writers: about one
+  write in 240 rejected). `internal/vendor` tries a write up to 4
+  times (3 resends, 20/40/80 ms apart); every command is idempotent, so a
+  resend is safe.
 
 #### Commands (verified on hardware)
 
