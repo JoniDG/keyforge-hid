@@ -401,6 +401,18 @@ func TestStream_WhenSeizeRequestedButUnsupported_ShouldFailBeforeOpening(t *test
 	assert.Empty(t, opener.openCalls())
 }
 
+func TestStream_WhenInterfaceAccessDenied_ShouldWrapErrAccessDenied(t *testing.T) {
+	t.Parallel()
+	denied := fmt.Errorf("device.Open %q: %w: %w", "enc", device.ErrOpen, device.ErrAccessDenied)
+	opener := &stubOpener{errs: map[string]error{"enc": denied}}
+	enum := fakeEnumerator{infos: []device.Info{encoderInfo("enc", "")}}
+	s := newSource(enum, opener)
+
+	err := s.Stream(context.Background(), func(protocol.InputEvent) error { return nil })
+
+	assert.ErrorIs(t, err, ErrAccessDenied)
+}
+
 func TestSeizeSupport_ShouldMirrorPlatformSeizeSupport(t *testing.T) {
 	t.Parallel()
 	want := device.PlatformSeizeSupport()

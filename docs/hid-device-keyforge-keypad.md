@@ -502,8 +502,24 @@ Tested against macOS Sequoia (15.x) and macOS 27.
   keyboard's keys, the stream keeps the ones whose Raw Input device name
   matches the interface's hidapi path (same instance id, different class
   GUID: `sameInterface`), and rebuilds boot keyboard reports from them
-  (`heldKeys`), so the usual `KeyboardMapper` decodes them. The encoders
-  (Consumer Control) are read through hidapi as on the other platforms.
+  (`heldKeys`), so the usual `KeyboardMapper` decodes them.
+- **Reading the encoders.** Every other interface (the Consumer Control
+  collection) is read with overlapped I/O of KeyForge's own
+  (`internal/device/overlapped_windows.go`), not hidapi. hidapi's
+  `hid_close` on Windows calls `CancelIo`, which only cancels the
+  calling thread's I/O and does not wait, and then frees the read
+  buffer and the `OVERLAPPED`. A read that completes afterwards writes
+  into freed memory, and after enough open/close cycles the process
+  dies with heap corruption (`0xc0000374`). The own reader cancels with
+  `CancelIoEx` and waits for the read before closing. The vendor
+  interface still goes through hidapi and keeps the exposure on its
+  error paths: a timed-out ack wait (`ErrVendorNoAck`), a cancelled
+  `ctx` or a timed-out write closes it with an I/O still pending.
+- **Access denied.** Windows holds mouse and keyboard collections
+  exclusively: opening one for reading fails with
+  `ERROR_ACCESS_DENIED`, which `Stream` returns wrapped in
+  `hid.ErrAccessDenied` so a caller can tell it from an unplug and not
+  reopen the same collection in a loop.
 - **Windows layout.** Raw Input only reports keys that have a scan code,
   which the reserved `0xA5`–`0xAE` do not. On Windows, `Provision`
   writes `Vendor.WindowsLayout` (`PlatformLayout`): keys on F13–F22,
@@ -540,6 +556,10 @@ built with `make build`):
 4. Same with the editor minimized and another app focused (`INPUTSINK`).
 5. Unplug and replug while streaming; check that streaming resumes or
    fails cleanly.
+6. Open/close stress: `go test ./internal/device -run TestHardware -count=1 -v`
+   with `KEYFORGE_HW_CYCLES=5000` passes. With
+   `KEYFORGE_HW_CYCLES_HIDAPI=1` as well it cycles through hidapi
+   instead, which is expected to reproduce the heap corruption.
 
 If keys print nothing while the encoders work, suspect the two guesses
 the code makes: the virtual key of F13–F24 (`usageForVKey`; the scan

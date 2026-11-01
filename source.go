@@ -52,6 +52,13 @@ var (
 // shared-mode Source instead of treating it as a device failure.
 var ErrSeizeNotImplemented = device.ErrSeizeNotImplemented
 
+// ErrAccessDenied is returned (wrapped) by Stream when the OS refuses
+// this process access to one of the device's interfaces (Windows holds
+// mouse and keyboard collections exclusively). Unlike an unplug it is
+// permanent: streaming the same device fails again until it changes, so
+// callers should not reconnect in a loop.
+var ErrAccessDenied = device.ErrAccessDenied
+
 // SeizeSupport reports whether the current build accepts WithSeize(true)
 // (Stream does not fail with ErrSeizeNotImplemented) and a one-line
 // description of the platform's seize status, suitable for logs or UI.

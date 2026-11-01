@@ -120,6 +120,49 @@ func TestOpener_Open_WhenKeyboardOpenerSet_ShouldRouteOnlyKeyboardsToIt(t *testi
 	assert.Equal(t, []string{"cc"}, hidapiPaths)
 }
 
+func TestOpener_Open_WhenCollectionOpenerSet_ShouldRouteNonKeyboardsToIt(t *testing.T) {
+	t.Parallel()
+	keyboardStream, collectionStream := &stubInputStream{}, &stubInputStream{}
+	var collectionPaths []string
+	o := &hidOpener{
+		mode: sharedNoopMode(),
+		openPath: func(path string) (hidDevice, error) {
+			t.Errorf("hidapi opened %q", path)
+			return &fakeHIDDevice{}, nil
+		},
+		openKeyboard: func(string) (InputStream, error) { return keyboardStream, nil },
+		openCollection: func(path string) (InputStream, error) {
+			collectionPaths = append(collectionPaths, path)
+			return collectionStream, nil
+		},
+	}
+
+	kb, err := o.Open(Info{Path: "kb", UsagePage: 0x0001, Usage: 0x0006})
+	require.NoError(t, err)
+	cc, err := o.Open(Info{Path: "cc", UsagePage: 0x000c, Usage: 0x0001})
+	require.NoError(t, err)
+
+	assert.Same(t, keyboardStream, kb)
+	assert.Same(t, collectionStream, cc)
+	assert.Equal(t, []string{"cc"}, collectionPaths)
+}
+
+func TestOpener_Open_WhenCollectionAccessDenied_ShouldWrapErrOpenAndErrAccessDenied(t *testing.T) {
+	t.Parallel()
+	o := &hidOpener{
+		mode: sharedNoopMode(),
+		openCollection: func(string) (InputStream, error) {
+			return nil, markAccessDenied(winErrorAccessDenied)
+		},
+	}
+
+	stream, err := o.Open(Info{Path: "mouse", UsagePage: 0x0001, Usage: 0x0002})
+
+	assert.Nil(t, stream)
+	assert.ErrorIs(t, err, ErrOpen)
+	assert.ErrorIs(t, err, ErrAccessDenied)
+}
+
 func TestOpener_Open_WhenKeyboardOpenerFails_ShouldWrapErrOpen(t *testing.T) {
 	t.Parallel()
 	cause := errors.New("raw input unavailable")
