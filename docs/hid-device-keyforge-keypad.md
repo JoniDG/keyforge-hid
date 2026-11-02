@@ -488,16 +488,83 @@ Tested against macOS Sequoia (15.x) and macOS 27.
 - Implementation lives in `internal/device/seize_linux.go` (currently
   a stub).
 
-### 5.3 Windows (planned)
+### 5.3 Windows (implemented, not validated on hardware)
 
-- With the reserved layout (§2.1) the OS has nothing to act on, so
-  seizing is not needed to keep the keypad quiet.
-- The open problem is reading the keys: Windows opens keyboard
-  collections exclusively, so hidapi cannot read the boot keyboard
-  interface, and Raw Input drops usages without a scan code such as
-  `0xA5` (§7). The Consumer Control collection (encoders) is readable
-  through hidapi.
-- `internal/device/seize_windows.go` is still a stub.
+> **⚠ PENDING: validate on Windows hardware (resume here).** Everything
+> below compiles and lints for `GOOS=windows`, but has never run on a
+> Windows host. Checklist further down.
+
+- **Reading the keys.** Windows opens keyboard collections exclusively,
+  so hidapi cannot read the boot keyboard interface. On Windows the
+  opener (`device.NewOpener`) reads keyboard interfaces (`0001:0006`)
+  through **Raw Input** instead (`internal/device/rawinput_windows.go`):
+  a hidden window registered with `RIDEV_INPUTSINK` receives every
+  keyboard's keys, the stream keeps the ones whose Raw Input device name
+  matches the interface's hidapi path (same instance id, different class
+  GUID: `sameInterface`), and rebuilds boot keyboard reports from them
+  (`heldKeys`), so the usual `KeyboardMapper` decodes them.
+- **Reading the encoders.** Every other interface (the Consumer Control
+  collection) is read with overlapped I/O of KeyForge's own
+  (`internal/device/overlapped_windows.go`), not hidapi. hidapi's
+  `hid_close` on Windows calls `CancelIo`, which only cancels the
+  calling thread's I/O and does not wait, and then frees the read
+  buffer and the `OVERLAPPED`. A read that completes afterwards writes
+  into freed memory, and after enough open/close cycles the process
+  dies with heap corruption (`0xc0000374`). The own reader cancels with
+  `CancelIoEx` and waits for the read before closing. The vendor
+  interface still goes through hidapi and keeps the exposure on its
+  error paths: a timed-out ack wait (`ErrVendorNoAck`), a cancelled
+  `ctx` or a timed-out write closes it with an I/O still pending.
+- **Access denied.** Windows holds mouse and keyboard collections
+  exclusively: opening one for reading fails with
+  `ERROR_ACCESS_DENIED`, which `Stream` returns wrapped in
+  `hid.ErrAccessDenied` so a caller can tell it from an unplug and not
+  reopen the same collection in a loop.
+- **Windows layout.** Raw Input only reports keys that have a scan code,
+  which the reserved `0xA5`–`0xAE` do not. On Windows, `Provision`
+  writes `Vendor.WindowsLayout` (`PlatformLayout`): keys on F13–F22,
+  which Windows binds no action to, and the same reserved Consumer
+  usages for the encoders. Their ids are the generic `key_0x68`…
+  `key_0x71`, the same as the catalog.
+- **Trade-offs.** Applications still receive F13–F22 as key presses: one
+  with a shortcut on them would fire. A keypad provisioned on Windows
+  and plugged into a Mac or Linux computer without KeyForge emits
+  F13–F22, which do act there (§2.1). With KeyForge, `Provision`
+  rewrites the layout of the platform at daemon start.
+- **Every keyboard's keys reach the daemon.** The Raw Input
+  registration covers all keyboards (that is how Raw Input works) and
+  stays while the process runs; the hub drops everything but F13–F24
+  before looking further, but antivirus heuristics may still flag the
+  pattern. Only one keyboard registration per process exists, so
+  nothing else in `keyforged` may register keyboards with Raw Input.
+- **Session.** Raw Input needs an interactive desktop session: the
+  daemon must run as the logged-in user (tray app), not as a service.
+- `internal/device/seize_windows.go` is still a stub; seizing is not
+  needed with either layout.
+
+**Validation checklist** (keypad plugged into the Windows PC, `probe`
+built with `make build`):
+
+1. `probe -provision -vendor-slots`: slots 0–9 show `usage=0x68`…`0x71`,
+   16–21 the reserved Consumer usages.
+2. `probe -stream -shared -events` with a text editor focused: each key
+   prints `press`/`release` `key_0x68`…`key_0x71`, each encoder its
+   `click`/`rotate_cw`/`rotate_ccw`, and Windows does nothing (no text,
+   no volume or media).
+3. Hold key 1, press key 2, release key 1, then key 2: the events show
+   `key_0x68` released while `key_0x69` stays held.
+4. Same with the editor minimized and another app focused (`INPUTSINK`).
+5. Unplug and replug while streaming; check that streaming resumes or
+   fails cleanly.
+6. Open/close stress: `go test ./internal/device -run TestHardware -count=1 -v`
+   with `KEYFORGE_HW_CYCLES=5000` passes. With
+   `KEYFORGE_HW_CYCLES_HIDAPI=1` as well it cycles through hidapi
+   instead, which is expected to reproduce the heap corruption.
+
+If keys print nothing while the encoders work, suspect the two guesses
+the code makes: the virtual key of F13–F24 (`usageForVKey`; the scan
+code `MakeCode` is the fallback) or the device name matching the hidapi
+path (`sameInterface`; older Windows prefixes names with `\??\`).
 
 ---
 
@@ -573,10 +640,10 @@ or layout.
 - **Reserved usages verified on macOS only.** The Linux behavior comes
   from the kernel source (`KEY_UNKNOWN`); it has not been tried on a
   Linux host yet.
-- **Windows cannot read the keys yet.** Windows opens keyboard
-  collections exclusively, so hidapi cannot read the boot keyboard
-  interface, and Raw Input drops usages without a scan code such as
-  `0xA5`. The encoders (Consumer Control) are unaffected.
+- **⚠ Windows support is not validated on hardware.** Keys are read
+  through Raw Input with a Windows-specific layout (F13–F22); see §5.3
+  for the design, its trade-offs and the checklist to run on a Windows
+  PC.
 - **RGB.** `Source.PaintInputs` only sets per-key colors under the
   user light effect; the other effects (breath, spectrum, …) are only
   reachable through probe. The colors persist on the device, so after a

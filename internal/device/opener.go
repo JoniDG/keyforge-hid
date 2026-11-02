@@ -6,13 +6,12 @@ import (
 	"github.com/sstallion/go-hid"
 )
 
-// Opener opens HID devices by their platform-specific path.
+// Opener opens enumerated HID interfaces.
 type Opener interface {
-	// Open returns an InputStream backed by the device located at
-	// the given platform-specific path (the same value reported in
-	// Info.Path during enumeration). The device is opened in the mode
-	// last accepted by SetSeize.
-	Open(path string) (InputStream, error)
+	// Open returns an InputStream backed by the interface info
+	// describes. The device is opened in the mode last accepted by
+	// SetSeize.
+	Open(info Info) (InputStream, error)
 }
 
 // NewOpener returns an Opener backed by hidapi via sstallion/go-hid.
@@ -22,6 +21,8 @@ func NewOpener() Opener {
 		openPath: func(path string) (hidDevice, error) {
 			return hid.OpenPath(path)
 		},
+		openKeyboard:   platformKeyboardOpener,
+		openCollection: platformCollectionOpener,
 	}
 }
 
@@ -74,9 +75,29 @@ func (m openMode) run(open func() error) error {
 type hidOpener struct {
 	mode     openMode
 	openPath func(path string) (hidDevice, error)
+	// openKeyboard, when set, reads keyboard interfaces instead of
+	// hidapi. Windows needs it: it opens keyboards exclusively, so
+	// hidapi cannot read their reports.
+	openKeyboard func(path string) (InputStream, error)
+	// openCollection, when set, reads every other interface instead of
+	// hidapi. Windows needs it: hidapi's close there frees the read
+	// buffer while the kernel may still write into it.
+	openCollection func(path string) (InputStream, error)
 }
 
-func (o *hidOpener) Open(path string) (InputStream, error) {
+func (o *hidOpener) Open(info Info) (InputStream, error) {
+	path := info.Path
+	open := o.openCollection
+	if info.UsagePage == usagePageGenericDesktop && info.Usage == usageKeyboard {
+		open = o.openKeyboard
+	}
+	if open != nil {
+		stream, err := open(path)
+		if err != nil {
+			return nil, fmt.Errorf("device.Open %q: %w: %w", path, ErrOpen, err)
+		}
+		return stream, nil
+	}
 	var dev hidDevice
 	err := o.mode.run(func() error {
 		var err error

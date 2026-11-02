@@ -145,7 +145,7 @@ func openAll(opener device.Opener, deviceID protocol.DeviceID, codes device.Code
 	}
 
 	for i := range specs {
-		stream, err := opener.Open(specs[i].info.Path)
+		stream, err := opener.Open(specs[i].info)
 		if err != nil {
 			closeAllSpecs(specs[:i])
 			return nil, fmt.Errorf("events.StreamAll: open %q: %w", specs[i].info.Path, err)

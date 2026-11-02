@@ -86,6 +86,7 @@ func TestSideKeyboardKeypad_DeclaresVendorInterface(t *testing.T) {
 		"key_0x6d", "key_0x6e", "key_0x6f", "key_0x70", "key_0x71",
 	}, v.LEDs)
 	assert.Len(t, v.Layout, v.Slots)
+	assert.Len(t, v.WindowsLayout, v.Slots)
 	assert.Len(t, v.Factory, v.Slots)
 }
 
@@ -103,6 +104,16 @@ func TestSideKeyboardKeypad_Layout_ShouldGiveEveryInputADistinctCode(t *testing.
 		vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009), // encoder 1
 		vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C), // encoder 2
 	}, layout[16:22])
+}
+
+func TestSideKeyboardKeypad_WindowsLayout_ShouldPutKeysOnF13ToF22(t *testing.T) {
+	t.Parallel()
+	v := SideKeyboardKeypad.Vendor
+
+	for i := range 10 {
+		assert.Equal(t, vendor.KeyboardSlot(0x00, byte(0x68+i)), v.WindowsLayout[i], "key slot %d should be F%d", i, 13+i)
+	}
+	assert.Equal(t, v.Layout[10:], v.WindowsLayout[10:], "only the keys differ from Layout")
 }
 
 // No OS acts on reserved usages (HID Usage Tables: keyboard 0xA5–0xAF,
