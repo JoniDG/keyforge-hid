@@ -23,7 +23,8 @@ type MatchedInput struct {
 
 // Inputs returns every interface of the device that matches one of the
 // (UsagePage, Usage) pairs declared in Known.Inputs, tagged with the
-// matching Role.
+// matching Role. Roles the current OS cannot read are left out (on
+// Windows, keyboard collections).
 //
 // Results are ordered by KnownInput declaration order (outer) and then
 // by the original Info order within each match group (inner) so the
@@ -40,6 +41,9 @@ func (d IdentifiedDevice) Inputs() []MatchedInput {
 	out := make([]MatchedInput, 0, len(d.Interfaces))
 	consumed := make(map[int]bool, len(d.Interfaces))
 	for _, ki := range d.Known.Inputs {
+		if !platformReads(ki.Role) {
+			continue
+		}
 		for i, info := range d.Interfaces {
 			if consumed[i] {
 				continue

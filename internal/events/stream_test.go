@@ -154,7 +154,7 @@ func TestStreamAll_WhenSecondOpenFails_ShouldCloseFirstStreamBeforeReturning(t *
 	}
 	inputs := []device.MatchedInput{
 		{Info: device.Info{Path: "p1"}, Role: device.RoleKeyboard},
-		{Info: device.Info{Path: "p2"}, Role: device.RoleEncoder},
+		{Info: device.Info{Path: "p2"}, Role: device.RoleConsumer},
 	}
 
 	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error { return nil })
@@ -214,7 +214,7 @@ func TestStreamAll_WhenEncoderReportArrives_ShouldDeliverDecodedEventToSink(t *t
 			),
 		},
 	}
-	inputs := []device.MatchedInput{{Info: device.Info{Path: "p1"}, Role: device.RoleEncoder}}
+	inputs := []device.MatchedInput{{Info: device.Info{Path: "p1"}, Role: device.RoleConsumer}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -248,7 +248,7 @@ func TestStreamAll_WithKeyboardAndEncoder_ShouldDeliverEventsFromBoth(t *testing
 	}
 	inputs := []device.MatchedInput{
 		{Info: device.Info{Path: "kb"}, Role: device.RoleKeyboard},
-		{Info: device.Info{Path: "enc"}, Role: device.RoleEncoder},
+		{Info: device.Info{Path: "enc"}, Role: device.RoleConsumer},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -347,7 +347,7 @@ func TestStreamAll_WhenOneOfMultipleReadersFails_ShouldCancelOthersAndPropagate(
 	}
 	inputs := []device.MatchedInput{
 		{Info: device.Info{Path: "kb"}, Role: device.RoleKeyboard},
-		{Info: device.Info{Path: "enc"}, Role: device.RoleEncoder},
+		{Info: device.Info{Path: "enc"}, Role: device.RoleConsumer},
 	}
 
 	done := make(chan error, 1)
@@ -400,7 +400,7 @@ func TestStreamAll_WhenCodesGiven_ShouldNameInputsAfterThem(t *testing.T) {
 	}
 	inputs := []device.MatchedInput{
 		{Info: device.Info{Path: "kb"}, Role: device.RoleKeyboard},
-		{Info: device.Info{Path: "enc"}, Role: device.RoleEncoder},
+		{Info: device.Info{Path: "enc"}, Role: device.RoleConsumer},
 	}
 	codes := device.Codes{
 		Keys:     map[byte]string{0xA5: "key_one"},
@@ -478,7 +478,7 @@ func TestStreamAll_WhenTwoInputsShareSamePath_ShouldOpenOnceAndApplyBothMappers(
 	t.Parallel()
 	// Both inputs share the same platform path. The stream delivers a
 	// 3-byte Consumer Control report: KeyboardMapper rejects it as
-	// ErrShortReport (silent skip), EncoderMapper decodes it.
+	// ErrShortReport (silent skip), ConsumerMapper decodes it.
 	opener := &stubOpener{
 		streams: map[string]device.InputStream{
 			"shared": newStubStream([]byte{0x03, 0xE9, 0x00}),
@@ -486,7 +486,7 @@ func TestStreamAll_WhenTwoInputsShareSamePath_ShouldOpenOnceAndApplyBothMappers(
 	}
 	inputs := []device.MatchedInput{
 		{Info: device.Info{Path: "shared", UsagePage: 0x0001, Usage: 0x0006}, Role: device.RoleKeyboard},
-		{Info: device.Info{Path: "shared", UsagePage: 0x000c, Usage: 0x0001}, Role: device.RoleEncoder},
+		{Info: device.Info{Path: "shared", UsagePage: 0x000c, Usage: 0x0001}, Role: device.RoleConsumer},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -521,7 +521,7 @@ func TestStreamAll_WhenSharedPathDeliversReportsForBothMappers_ShouldEmitFromBot
 	}
 	inputs := []device.MatchedInput{
 		{Info: device.Info{Path: "shared"}, Role: device.RoleKeyboard},
-		{Info: device.Info{Path: "shared"}, Role: device.RoleEncoder},
+		{Info: device.Info{Path: "shared"}, Role: device.RoleConsumer},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

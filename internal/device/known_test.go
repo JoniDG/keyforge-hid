@@ -67,12 +67,12 @@ func TestSideKeyboardKeypad_HasExpectedVIDPID(t *testing.T) {
 	assert.Equal(t, "SDINNOVATION SIDE-KEYBOARD", SideKeyboardKeypad.Name)
 }
 
-func TestSideKeyboardKeypad_DeclaresKeyboardAndEncoderInputs(t *testing.T) {
+func TestSideKeyboardKeypad_DeclaresKeyboardAndConsumerInputs(t *testing.T) {
 	t.Parallel()
 	require.Len(t, SideKeyboardKeypad.Inputs, 2)
 
 	assert.Equal(t, KnownInput{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006}, SideKeyboardKeypad.Inputs[0])
-	assert.Equal(t, KnownInput{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001}, SideKeyboardKeypad.Inputs[1])
+	assert.Equal(t, KnownInput{Role: RoleConsumer, UsagePage: 0x000c, Usage: 0x0001}, SideKeyboardKeypad.Inputs[1])
 }
 
 func TestSideKeyboardKeypad_DeclaresVendorInterface(t *testing.T) {
@@ -106,14 +106,31 @@ func TestSideKeyboardKeypad_Layout_ShouldGiveEveryInputADistinctCode(t *testing.
 	}, layout[16:22])
 }
 
-func TestSideKeyboardKeypad_WindowsLayout_ShouldPutKeysOnF13ToF22(t *testing.T) {
+func TestSideKeyboardKeypad_WindowsLayout_ShouldPutKeysOnReservedConsumerUsages(t *testing.T) {
 	t.Parallel()
 	v := SideKeyboardKeypad.Vendor
 
 	for i := range 10 {
-		assert.Equal(t, vendor.KeyboardSlot(0x00, byte(0x68+i)), v.WindowsLayout[i], "key slot %d should be F%d", i, 13+i)
+		slot := v.WindowsLayout[i]
+		assert.Equal(t, vendor.ConsumerSlot(uint16(0x000D+i)), slot, "key slot %d", i) // #nosec G115 -- i < 10
 	}
 	assert.Equal(t, v.Layout[10:], v.WindowsLayout[10:], "only the keys differ from Layout")
+}
+
+// Windows' keyboard driver drops usages outside the keyboard collection's
+// declared range (0x00–0x65 on the reference keypad), and no OS acts on
+// reserved Consumer usages (0x07–0x1F), which the Consumer collection
+// declares (up to 0x23C).
+func TestSideKeyboardKeypad_WindowsLayout_ShouldOnlyUseReservedConsumerUsages(t *testing.T) {
+	t.Parallel()
+	for i, slot := range SideKeyboardKeypad.Vendor.WindowsLayout {
+		if slot.Type == vendor.SlotDisabled {
+			continue
+		}
+		require.Equal(t, vendor.SlotConsumer, slot.Type, "slot %d", i)
+		usage := uint16(slot.Codes[0]) | uint16(slot.Codes[1])<<8
+		assert.True(t, usage >= 0x07 && usage <= 0x1F, "slot %d: usage 0x%04x is not reserved", i, usage)
+	}
 }
 
 // No OS acts on reserved usages (HID Usage Tables: keyboard 0xA5–0xAF,

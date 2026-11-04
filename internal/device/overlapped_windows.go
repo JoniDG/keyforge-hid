@@ -10,7 +10,7 @@ import (
 	"unsafe"
 )
 
-// platformCollectionOpener reads non-keyboard collections with
+// platformCollectionOpener reads collections with
 // overlapped I/O of its own instead of hidapi. hidapi's hid_close frees
 // the read buffer and OVERLAPPED while a read is still pending (CancelIo
 // only cancels the calling thread's I/O and does not wait), so the
@@ -19,7 +19,8 @@ import (
 var platformCollectionOpener = openCollection
 
 var (
-	hidDLL = syscall.NewLazyDLL("hid.dll")
+	hidDLL   = syscall.NewLazyDLL("hid.dll")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 
 	procHidDGetPreparsedData  = hidDLL.NewProc("HidD_GetPreparsedData")
 	procHidDFreePreparsedData = hidDLL.NewProc("HidD_FreePreparsedData")

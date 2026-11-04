@@ -167,8 +167,8 @@ func mapperFor(role device.InputRole, deviceID protocol.DeviceID, codes device.C
 	switch role {
 	case device.RoleKeyboard:
 		return NewKeyboardMapper(deviceID, codes.Keys)
-	case device.RoleEncoder:
-		return NewEncoderMapper(deviceID, codes.Encoders)
+	case device.RoleConsumer:
+		return NewConsumerMapper(deviceID, codes)
 	default:
 		return nil
 	}

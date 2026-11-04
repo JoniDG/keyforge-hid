@@ -13,7 +13,7 @@ type InputRole string
 // Roles understood by the registry. Add new ones as device classes grow.
 const (
 	RoleKeyboard InputRole = "keyboard"
-	RoleEncoder  InputRole = "encoder"
+	RoleConsumer InputRole = "consumer"
 )
 
 // KnownInput declares one input interface a KnownDevice exposes,
@@ -67,6 +67,10 @@ type Codes struct {
 	// Encoders maps Consumer Control usages to the encoder input and
 	// action they stand for. A usage left out is ignored.
 	Encoders map[uint16]InputCode
+	// ConsumerKeys maps Consumer Control usages to key input ids, for
+	// layouts that put keys on the Consumer report (WindowsLayout). A
+	// usage left out is ignored.
+	ConsumerKeys map[uint16]string
 }
 
 // InputCode is the catalog input and action one code stands for.
@@ -94,8 +98,8 @@ type VendorInterface struct {
 	// every physical input emits a distinct code that Codes maps to
 	// Controls. PlatformLayout picks it everywhere but Windows.
 	Layout []vendor.Slot
-	// WindowsLayout replaces Layout on Windows, where keys must have a
-	// scan code for Raw Input to report them (see PlatformLayout).
+	// WindowsLayout replaces Layout on Windows, where keyboard
+	// collections cannot be read (see PlatformLayout).
 	WindowsLayout []vendor.Slot
 	// Factory is the out-of-the-box slot content, written back slot by
 	// slot to undo Layout without the firmware's factory-reset command.
@@ -122,7 +126,7 @@ func encoder(id string, x, y float64) protocol.Input {
 // Its inputs split across two HID interfaces:
 //   - Boot keyboard (UsagePage=0x0001, Usage=0x0006) for the 10 keys.
 //   - Consumer Control (UsagePage=0x000c, Usage=0x0001) for the 2
-//     encoders.
+//     encoders, and for the keys too under WindowsLayout.
 //
 // Out of the box every key emits Ctrl+A and both encoders emit the same
 // volume/mute usages, so the inputs are indistinguishable. Layout gives
@@ -139,7 +143,7 @@ var SideKeyboardKeypad = KnownDevice{
 	Name:      "SDINNOVATION SIDE-KEYBOARD",
 	Inputs: []KnownInput{
 		{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
-		{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001},
+		{Role: RoleConsumer, UsagePage: 0x000c, Usage: 0x0001},
 	},
 	Controls: []protocol.Input{
 		key("key_0x68", 0, 0), key("key_0x69", 1, 0), key("key_0x6a", 2, 0), key("key_0x6b", 3, 0), key("key_0x6c", 4, 0),
@@ -165,6 +169,10 @@ var SideKeyboardKeypad = KnownDevice{
 			0x00E2: {ID: "encoder_0", Action: protocol.InputActionClick},
 			0x00E9: {ID: "encoder_0", Action: protocol.InputActionRotateCw},
 			0x00EA: {ID: "encoder_0", Action: protocol.InputActionRotateCcw},
+		},
+		ConsumerKeys: map[uint16]string{
+			0x000D: "key_0x68", 0x000E: "key_0x69", 0x000F: "key_0x6a", 0x0010: "key_0x6b", 0x0011: "key_0x6c",
+			0x0012: "key_0x6d", 0x0013: "key_0x6e", 0x0014: "key_0x6f", 0x0015: "key_0x70", 0x0016: "key_0x71",
 		},
 	},
 	// Slots 0–21 back the ten keys and the two encoders' click/CW/CCW;
@@ -198,16 +206,20 @@ var SideKeyboardKeypad = KnownDevice{
 			[3]vendor.Slot{vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009)},
 			[3]vendor.Slot{vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C)},
 		),
-		// F13–F22 have scan codes, so Raw Input reports them, and Windows
-		// binds no action to them. They keep their generic ids. On macOS
-		// and Linux they do trigger system actions, hence Layout there.
+		// Windows holds keyboard collections exclusively and its keyboard
+		// driver drops usages the descriptor does not declare (0x00–0x65
+		// on this keypad), so no layout on the keyboard report is both
+		// readable and ignored there. The keys move to reserved Consumer
+		// usages, in range for the Consumer collection and read like the
+		// encoders. That report carries one usage, so overlapping keys
+		// are released early (see events.ConsumerMapper).
 		WindowsLayout: sideKeyboardSlots(
 			[10]vendor.Slot{
-				vendor.KeyboardSlot(0, 0x68), vendor.KeyboardSlot(0, 0x69),
-				vendor.KeyboardSlot(0, 0x6A), vendor.KeyboardSlot(0, 0x6B),
-				vendor.KeyboardSlot(0, 0x6C), vendor.KeyboardSlot(0, 0x6D),
-				vendor.KeyboardSlot(0, 0x6E), vendor.KeyboardSlot(0, 0x6F),
-				vendor.KeyboardSlot(0, 0x70), vendor.KeyboardSlot(0, 0x71),
+				vendor.ConsumerSlot(0x000D), vendor.ConsumerSlot(0x000E),
+				vendor.ConsumerSlot(0x000F), vendor.ConsumerSlot(0x0010),
+				vendor.ConsumerSlot(0x0011), vendor.ConsumerSlot(0x0012),
+				vendor.ConsumerSlot(0x0013), vendor.ConsumerSlot(0x0014),
+				vendor.ConsumerSlot(0x0015), vendor.ConsumerSlot(0x0016),
 			},
 			[3]vendor.Slot{vendor.ConsumerSlot(0x0007), vendor.ConsumerSlot(0x0008), vendor.ConsumerSlot(0x0009)},
 			[3]vendor.Slot{vendor.ConsumerSlot(0x000A), vendor.ConsumerSlot(0x000B), vendor.ConsumerSlot(0x000C)},
