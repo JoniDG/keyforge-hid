@@ -124,6 +124,12 @@ any input is released, so two keys held there could not be told apart
 on release (checked on hardware); that is fine for encoder clicks and
 detents, which are instantaneous.
 
+**Windows.** The keyboard report cannot be used there (§5.3), so on
+Windows `Provision` writes `Vendor.WindowsLayout`: the same encoders,
+and the keys on the reserved Consumer usages `0x000D`–`0x0016`
+(`Codes.ConsumerKeys` maps them to the same `key_0x68`…`key_0x71`). The
+single-usage limit above then applies to the keys too.
+
 **Without KeyForge.** The layout persists on the device, so on a computer
 without KeyForge the provisioned keypad does nothing: the OS ignores its
 codes. Writing the factory layout back (`probe -factory-layout`) restores
@@ -213,29 +219,34 @@ Numbered reports — **3 bytes**, with the report ID in byte 0.
 
 Usages the mapper knows (`KnownDevice.Codes.Encoders`):
 
-| Bytes (after report ID) | Usage    | HID Consumer Page meaning  | KeyForge action             |
-| ----------------------- | -------- | -------------------------- | --------------------------- |
-| `07 00`                 | `0x0007` | Reserved                   | `click` on `encoder_0`      |
-| `08 00`                 | `0x0008` | Reserved                   | `rotate_cw` on `encoder_0`  |
-| `09 00`                 | `0x0009` | Reserved                   | `rotate_ccw` on `encoder_0` |
-| `0A 00`                 | `0x000A` | Reserved                   | `click` on `encoder_1`      |
-| `0B 00`                 | `0x000B` | Reserved                   | `rotate_cw` on `encoder_1`  |
-| `0C 00`                 | `0x000C` | Reserved                   | `rotate_ccw` on `encoder_1` |
-| `E2 00`                 | `0x00E2` | Mute (factory)             | `click` on `encoder_0`      |
-| `E9 00`                 | `0x00E9` | Volume Increment (factory) | `rotate_cw` on `encoder_0`  |
-| `EA 00`                 | `0x00EA` | Volume Decrement (factory) | `rotate_ccw` on `encoder_0` |
-| `00 00`                 | `0x0000` | release                    | ignored                     |
+| Bytes (after report ID) | Usage             | HID Consumer Page meaning  | KeyForge action                            |
+| ----------------------- | ----------------- | -------------------------- | ------------------------------------------ |
+| `07 00`                 | `0x0007`          | Reserved                   | `click` on `encoder_0`                     |
+| `08 00`                 | `0x0008`          | Reserved                   | `rotate_cw` on `encoder_0`                 |
+| `09 00`                 | `0x0009`          | Reserved                   | `rotate_ccw` on `encoder_0`                |
+| `0A 00`                 | `0x000A`          | Reserved                   | `click` on `encoder_1`                     |
+| `0B 00`                 | `0x000B`          | Reserved                   | `rotate_cw` on `encoder_1`                 |
+| `0C 00`                 | `0x000C`          | Reserved                   | `rotate_ccw` on `encoder_1`                |
+| `0D 00`…`16 00`         | `0x000D`…`0x0016` | Reserved (Windows layout)  | `press`/`release` on `key_0x68`…`key_0x71` |
+| `E2 00`                 | `0x00E2`          | Mute (factory)             | `click` on `encoder_0`                     |
+| `E9 00`                 | `0x00E9`          | Volume Increment (factory) | `rotate_cw` on `encoder_0`                 |
+| `EA 00`                 | `0x00EA`          | Volume Decrement (factory) | `rotate_ccw` on `encoder_0`                |
+| `00 00`                 | `0x0000`          | release                    | releases a held key                        |
 
-Every event arrives as a **press + release pair**; the release report
-(`03 00 00`) is dropped silently because rotation has no release
-semantic and the click is emitted on press.
+Every event arrives as a **press + release pair**. For the encoders the
+release report (`03 00 00`) emits nothing: rotation has no release
+semantic and the click is emitted on press. A key (Windows layout) is
+pressed when its usage appears and released as soon as a report stops
+carrying it, which is how the single-usage report shows it: holding key
+1 and pressing key 2 releases key 1, and letting go of key 1 afterwards
+emits nothing.
 
 The reserved usages come from the KeyForge layout (§2.1). Under the
 factory mapping both encoders emit the `E2`/`E9`/`EA` usages and
 collapse into `encoder_0`.
 
-Decoded by `internal/events.EncoderMapper`. The mapper is stateless
-across reports.
+Decoded by `internal/events.ConsumerMapper`. The only state it keeps
+across reports is the key held down.
 
 ### 4.3 Vendor-specific (interface 2, `FF00:0002`)
 
@@ -490,21 +501,26 @@ Tested against macOS Sequoia (15.x) and macOS 27.
 
 ### 5.3 Windows (implemented, not validated on hardware)
 
-> **⚠ PENDING: validate on Windows hardware (resume here).** Everything
-> below compiles and lints for `GOOS=windows`, but has never run on a
-> Windows host. Checklist further down.
+> **⚠ PENDING: validate the keys on Windows hardware (resume here).**
+> The encoders and the Consumer reader work on a Windows host; the keys
+> on the Consumer layout compile and lint for `GOOS=windows` but have
+> not run there yet. Checklist further down.
 
-- **Reading the keys.** Windows opens keyboard collections exclusively,
-  so hidapi cannot read the boot keyboard interface. On Windows the
-  opener (`device.NewOpener`) reads keyboard interfaces (`0001:0006`)
-  through **Raw Input** instead (`internal/device/rawinput_windows.go`):
-  a hidden window registered with `RIDEV_INPUTSINK` receives every
-  keyboard's keys, the stream keeps the ones whose Raw Input device name
-  matches the interface's hidapi path (same instance id, different class
-  GUID: `sameInterface`), and rebuilds boot keyboard reports from them
-  (`heldKeys`), so the usual `KeyboardMapper` decodes them.
-- **Reading the encoders.** Every other interface (the Consumer Control
-  collection) is read with overlapped I/O of KeyForge's own
+- **Reading the keys.** KeyForge cannot read the keyboard collections
+  on Windows. Windows opens them exclusively, so hidapi cannot read
+  them, and its keyboard driver (`kbdhid`) only turns into keystrokes
+  the usages the collection's report descriptor declares. Both of this
+  keypad's keyboard collections declare `0x00`–`0x65` plus the
+  modifiers (`HidP_GetButtonCaps`, checked on hardware), and every
+  usage in that range is a real key that Windows and the focused app
+  act on. A first attempt put the keys on F13–F22 (`0x68`–`0x71`) and
+  read them through Raw Input: out of range, so nothing ever arrived,
+  not even to a standalone Raw Input listener. So on Windows
+  `IdentifiedDevice.Inputs` leaves keyboard collections out, and the
+  keys move to the Consumer collection (see "Windows layout").
+- **Reading the Consumer collection.** The Consumer Control collection
+  (encoders, and keys under the Windows layout) is read with overlapped
+  I/O of KeyForge's own
   (`internal/device/overlapped_windows.go`), not hidapi. hidapi's
   `hid_close` on Windows calls `CancelIo`, which only cancels the
   calling thread's I/O and does not wait, and then frees the read
@@ -520,51 +536,45 @@ Tested against macOS Sequoia (15.x) and macOS 27.
   `ERROR_ACCESS_DENIED`, which `Stream` returns wrapped in
   `hid.ErrAccessDenied` so a caller can tell it from an unplug and not
   reopen the same collection in a loop.
-- **Windows layout.** Raw Input only reports keys that have a scan code,
-  which the reserved `0xA5`–`0xAE` do not. On Windows, `Provision`
-  writes `Vendor.WindowsLayout` (`PlatformLayout`): keys on F13–F22,
-  which Windows binds no action to, and the same reserved Consumer
-  usages for the encoders. Their ids are the generic `key_0x68`…
-  `key_0x71`, the same as the catalog.
-- **Trade-offs.** Applications still receive F13–F22 as key presses: one
-  with a shortcut on them would fire. A keypad provisioned on Windows
-  and plugged into a Mac or Linux computer without KeyForge emits
-  F13–F22, which do act there (§2.1). With KeyForge, `Provision`
-  rewrites the layout of the platform at daemon start.
-- **Every keyboard's keys reach the daemon.** The Raw Input
-  registration covers all keyboards (that is how Raw Input works) and
-  stays while the process runs; the hub drops everything but F13–F24
-  before looking further, but antivirus heuristics may still flag the
-  pattern. Only one keyboard registration per process exists, so
-  nothing else in `keyforged` may register keyboards with Raw Input.
-- **Session.** Raw Input needs an interactive desktop session: the
-  daemon must run as the logged-in user (tray app), not as a service.
+- **Windows layout.** `Provision` writes `Vendor.WindowsLayout`
+  (`PlatformLayout`): the keys on the reserved Consumer usages
+  `0x000D`–`0x0016`, the encoders on the same `0x0007`–`0x000C` as
+  everywhere. The Consumer collection declares usages up to `0x23C`, so
+  they reach the reader, and Windows binds no action to reserved
+  Consumer usages (the encoders on `0x0007`–`0x000C` changed nothing on
+  hardware). The ids stay `key_0x68`…`key_0x71` (`Codes.ConsumerKeys`).
+- **Trade-off.** The Consumer report carries one usage, so on Windows
+  overlapping keys are released early: holding key 1 and pressing key 2
+  emits `key_0x68` `release` and `key_0x69` `press`, and letting go of
+  key 1 afterwards emits nothing. Every key still emits exactly one
+  `press`; only bindings on `release` see the early release. Turning an
+  encoder while a key is held releases the key the same way.
+- **Without KeyForge.** A keypad provisioned on Windows emits reserved
+  Consumer usages, which no OS acts on, so it is inert elsewhere as
+  well (§2.1). With KeyForge, `Provision` rewrites the layout of the
+  platform at daemon start.
 - `internal/device/seize_windows.go` is still a stub; seizing is not
   needed with either layout.
 
 **Validation checklist** (keypad plugged into the Windows PC, `probe`
 built with `make build`):
 
-1. `probe -provision -vendor-slots`: slots 0–9 show `usage=0x68`…`0x71`,
-   16–21 the reserved Consumer usages.
+1. `probe -provision -vendor-slots`: slots 0–9 show
+   `consumer usage=0x000d`…`0x0016`, 16–21 `0x0007`…`0x000c`.
 2. `probe -stream -shared -events` with a text editor focused: each key
    prints `press`/`release` `key_0x68`…`key_0x71`, each encoder its
    `click`/`rotate_cw`/`rotate_ccw`, and Windows does nothing (no text,
    no volume or media).
-3. Hold key 1, press key 2, release key 1, then key 2: the events show
-   `key_0x68` released while `key_0x69` stays held.
-4. Same with the editor minimized and another app focused (`INPUTSINK`).
+3. Hold key 1, press key 2, release key 2, then key 1: the events show
+   `key_0x68` press, `key_0x68` release, `key_0x69` press, `key_0x69`
+   release, and nothing on the last release.
+4. Same as step 2 with the editor minimized and another app focused.
 5. Unplug and replug while streaming; check that streaming resumes or
    fails cleanly.
 6. Open/close stress: `go test ./internal/device -run TestHardware -count=1 -v`
    with `KEYFORGE_HW_CYCLES=5000` passes. With
    `KEYFORGE_HW_CYCLES_HIDAPI=1` as well it cycles through hidapi
    instead, which is expected to reproduce the heap corruption.
-
-If keys print nothing while the encoders work, suspect the two guesses
-the code makes: the virtual key of F13–F24 (`usageForVKey`; the scan
-code `MakeCode` is the fallback) or the device name matching the hidapi
-path (`sameInterface`; older Windows prefixes names with `\??\`).
 
 ---
 
@@ -640,10 +650,10 @@ or layout.
 - **Reserved usages verified on macOS only.** The Linux behavior comes
   from the kernel source (`KEY_UNKNOWN`); it has not been tried on a
   Linux host yet.
-- **⚠ Windows support is not validated on hardware.** Keys are read
-  through Raw Input with a Windows-specific layout (F13–F22); see §5.3
-  for the design, its trade-offs and the checklist to run on a Windows
-  PC.
+- **⚠ Windows keys are not validated on hardware.** Encoders work on
+  Windows; the keys use a Windows-specific layout on the Consumer
+  report (§5.3), where overlapping keys are released early. See §5.3
+  for the design and the checklist to run on a Windows PC.
 - **RGB.** `Source.PaintInputs` only sets per-key colors under the
   user light effect; the other effects (breath, spectrum, …) are only
   reachable through probe. The colors persist on the device, so after a

@@ -94,35 +94,9 @@ func (*stubInputStream) Read(ctx context.Context, _ func([]byte) error) error {
 
 func (*stubInputStream) Close() error { return nil }
 
-func TestOpener_Open_WhenKeyboardOpenerSet_ShouldRouteOnlyKeyboardsToIt(t *testing.T) {
+func TestOpener_Open_WhenCollectionOpenerSet_ShouldRouteEveryInterfaceToIt(t *testing.T) {
 	t.Parallel()
-	keyboardStream := &stubInputStream{}
-	var keyboardPaths, hidapiPaths []string
-	o := &hidOpener{
-		mode: sharedNoopMode(),
-		openPath: func(path string) (hidDevice, error) {
-			hidapiPaths = append(hidapiPaths, path)
-			return &fakeHIDDevice{}, nil
-		},
-		openKeyboard: func(path string) (InputStream, error) {
-			keyboardPaths = append(keyboardPaths, path)
-			return keyboardStream, nil
-		},
-	}
-
-	kb, err := o.Open(Info{Path: "kb", UsagePage: 0x0001, Usage: 0x0006})
-	require.NoError(t, err)
-	_, err = o.Open(Info{Path: "cc", UsagePage: 0x000c, Usage: 0x0001})
-	require.NoError(t, err)
-
-	assert.Same(t, keyboardStream, kb)
-	assert.Equal(t, []string{"kb"}, keyboardPaths)
-	assert.Equal(t, []string{"cc"}, hidapiPaths)
-}
-
-func TestOpener_Open_WhenCollectionOpenerSet_ShouldRouteNonKeyboardsToIt(t *testing.T) {
-	t.Parallel()
-	keyboardStream, collectionStream := &stubInputStream{}, &stubInputStream{}
+	collectionStream := &stubInputStream{}
 	var collectionPaths []string
 	o := &hidOpener{
 		mode: sharedNoopMode(),
@@ -130,7 +104,6 @@ func TestOpener_Open_WhenCollectionOpenerSet_ShouldRouteNonKeyboardsToIt(t *test
 			t.Errorf("hidapi opened %q", path)
 			return &fakeHIDDevice{}, nil
 		},
-		openKeyboard: func(string) (InputStream, error) { return keyboardStream, nil },
 		openCollection: func(path string) (InputStream, error) {
 			collectionPaths = append(collectionPaths, path)
 			return collectionStream, nil
@@ -142,9 +115,9 @@ func TestOpener_Open_WhenCollectionOpenerSet_ShouldRouteNonKeyboardsToIt(t *test
 	cc, err := o.Open(Info{Path: "cc", UsagePage: 0x000c, Usage: 0x0001})
 	require.NoError(t, err)
 
-	assert.Same(t, keyboardStream, kb)
+	assert.Same(t, collectionStream, kb)
 	assert.Same(t, collectionStream, cc)
-	assert.Equal(t, []string{"cc"}, collectionPaths)
+	assert.Equal(t, []string{"kb", "cc"}, collectionPaths)
 }
 
 func TestOpener_Open_WhenCollectionAccessDenied_ShouldWrapErrOpenAndErrAccessDenied(t *testing.T) {
@@ -161,21 +134,6 @@ func TestOpener_Open_WhenCollectionAccessDenied_ShouldWrapErrOpenAndErrAccessDen
 	assert.Nil(t, stream)
 	assert.ErrorIs(t, err, ErrOpen)
 	assert.ErrorIs(t, err, ErrAccessDenied)
-}
-
-func TestOpener_Open_WhenKeyboardOpenerFails_ShouldWrapErrOpen(t *testing.T) {
-	t.Parallel()
-	cause := errors.New("raw input unavailable")
-	o := &hidOpener{
-		mode:         sharedNoopMode(),
-		openKeyboard: func(string) (InputStream, error) { return nil, cause },
-	}
-
-	stream, err := o.Open(Info{Path: "kb", UsagePage: 0x0001, Usage: 0x0006})
-
-	assert.Nil(t, stream)
-	assert.ErrorIs(t, err, ErrOpen)
-	assert.ErrorIs(t, err, cause)
 }
 
 func TestOpener_Open_WhenPathFails_ShouldWrapErrOpen(t *testing.T) {

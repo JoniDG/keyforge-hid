@@ -201,7 +201,7 @@ func TestIdentifiedDevice_Inputs_ShouldOrderByKnownInputDeclarationFirst(t *test
 		Known: KnownDevice{
 			Inputs: []KnownInput{
 				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
-				{Role: RoleEncoder, UsagePage: 0x000c, Usage: 0x0001},
+				{Role: RoleConsumer, UsagePage: 0x000c, Usage: 0x0001},
 			},
 		},
 		Interfaces: []Info{
@@ -215,7 +215,7 @@ func TestIdentifiedDevice_Inputs_ShouldOrderByKnownInputDeclarationFirst(t *test
 	require.Len(t, got, 2)
 	assert.Equal(t, RoleKeyboard, got[0].Role)
 	assert.Equal(t, "keyboard", got[0].Info.Path)
-	assert.Equal(t, RoleEncoder, got[1].Role)
+	assert.Equal(t, RoleConsumer, got[1].Role)
 	assert.Equal(t, "encoder", got[1].Info.Path)
 }
 
@@ -225,7 +225,7 @@ func TestIdentifiedDevice_Inputs_WhenTwoKnownInputsShareUsage_ShouldEmitInfoOnce
 		Known: KnownDevice{
 			Inputs: []KnownInput{
 				{Role: RoleKeyboard, UsagePage: 0x0001, Usage: 0x0006},
-				{Role: RoleEncoder, UsagePage: 0x0001, Usage: 0x0006},
+				{Role: RoleConsumer, UsagePage: 0x0001, Usage: 0x0006},
 			},
 		},
 		Interfaces: []Info{

@@ -21,7 +21,6 @@ func NewOpener() Opener {
 		openPath: func(path string) (hidDevice, error) {
 			return hid.OpenPath(path)
 		},
-		openKeyboard:   platformKeyboardOpener,
 		openCollection: platformCollectionOpener,
 	}
 }
@@ -75,24 +74,16 @@ func (m openMode) run(open func() error) error {
 type hidOpener struct {
 	mode     openMode
 	openPath func(path string) (hidDevice, error)
-	// openKeyboard, when set, reads keyboard interfaces instead of
-	// hidapi. Windows needs it: it opens keyboards exclusively, so
-	// hidapi cannot read their reports.
-	openKeyboard func(path string) (InputStream, error)
-	// openCollection, when set, reads every other interface instead of
-	// hidapi. Windows needs it: hidapi's close there frees the read
-	// buffer while the kernel may still write into it.
+	// openCollection, when set, reads interfaces instead of hidapi.
+	// Windows needs it: hidapi's close there frees the read buffer
+	// while the kernel may still write into it.
 	openCollection func(path string) (InputStream, error)
 }
 
 func (o *hidOpener) Open(info Info) (InputStream, error) {
 	path := info.Path
-	open := o.openCollection
-	if info.UsagePage == usagePageGenericDesktop && info.Usage == usageKeyboard {
-		open = o.openKeyboard
-	}
-	if open != nil {
-		stream, err := open(path)
+	if o.openCollection != nil {
+		stream, err := o.openCollection(path)
 		if err != nil {
 			return nil, fmt.Errorf("device.Open %q: %w: %w", path, ErrOpen, err)
 		}
