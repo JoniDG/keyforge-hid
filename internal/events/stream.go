@@ -36,8 +36,9 @@ type readerSpec struct {
 // StreamAll opens every input via opener, reads them in parallel,
 // decodes each stream's reports through the role-appropriate mapper(s),
 // naming the inputs after codes, and delivers the resulting InputEvents
-// to sink in arrival order. It blocks until the parent context is cancelled, sink returns an error,
-// or any reader fails with a non-cancellation error.
+// to sink in arrival order. It blocks until the parent context is
+// cancelled, sink returns an error, or any reader fails with a
+// non-cancellation error.
 //
 // Inputs whose platform Path coincides (multi-TLC interfaces) are
 // opened once and every report is offered to each mapper for that
