@@ -87,8 +87,21 @@ type Source struct {
 	// vendorSem holds one token while Provision or PaintInputs talk to
 	// the vendor interface: a command and its ack must not interleave
 	// with another one.
-	vendorSem chan struct{}
-	seize     bool
+	vendorSem    chan struct{}
+	seize        bool
+	onStreamOpen func([]Interface)
+}
+
+// Interface is one HID interface Stream opened to read the keypad.
+// UsagePage and Usage identify its top-level collection (000c:0001 is
+// Consumer Control, 0001:0006 a keyboard).
+type Interface struct {
+	Path      string
+	UsagePage uint16
+	Usage     uint16
+	// InterfaceNumber is the USB interface number, -1 when the platform
+	// does not report it.
+	InterfaceNumber int
 }
 
 // vendorClient is the part of *vendor.Client that Provision and
@@ -114,6 +127,15 @@ type Option func(*Source)
 // honor the request rather than silently degrading to shared mode.
 func WithSeize(seize bool) Option {
 	return func(s *Source) { s.seize = seize }
+}
+
+// WithOnStreamOpen sets fn to be called by Stream once every interface
+// it reads is open, before any event is delivered, with those
+// interfaces. Stream is only connected to the keypad from that point:
+// an open the OS refuses fails Stream without calling fn. fn runs on
+// Stream's goroutine and must not block.
+func WithOnStreamOpen(fn func([]Interface)) Option {
+	return func(s *Source) { s.onStreamOpen = fn }
 }
 
 // New builds a Source backed by the real HID pipeline (hidapi-backed
@@ -183,7 +205,7 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 	if err := s.setSeize(s.seize); err != nil {
 		return fmt.Errorf("hid.Stream: %w", err)
 	}
-	err = events.StreamAll(ctx, s.opener, r.id, r.target.Known.Codes, r.inputs, sink)
+	err = events.StreamAll(ctx, s.opener, r.id, r.target.Known.Codes, r.inputs, s.notifyStreamOpen, sink)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}
@@ -191,6 +213,19 @@ func (s *Source) Stream(ctx context.Context, sink func(protocol.InputEvent) erro
 		return fmt.Errorf("hid.Stream: %w", err)
 	}
 	return nil
+}
+
+// notifyStreamOpen relays the interfaces StreamAll opened to the
+// WithOnStreamOpen callback, if any.
+func (s *Source) notifyStreamOpen(opened []device.Info) {
+	if s.onStreamOpen == nil {
+		return
+	}
+	ifaces := make([]Interface, len(opened))
+	for i, info := range opened {
+		ifaces[i] = Interface{Path: info.Path, UsagePage: info.UsagePage, Usage: info.Usage, InterfaceNumber: info.Interface}
+	}
+	s.onStreamOpen(ifaces)
 }
 
 // Provision writes the KeyForge input layout for the current OS

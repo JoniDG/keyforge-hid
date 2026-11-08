@@ -413,6 +413,41 @@ func TestStream_WhenInterfaceAccessDenied_ShouldWrapErrAccessDenied(t *testing.T
 	assert.ErrorIs(t, err, ErrAccessDenied)
 }
 
+func TestStream_WhenInterfacesOpen_ShouldReportThemToOnStreamOpen(t *testing.T) {
+	t.Parallel()
+	// Consumer only: Windows does not read keyboard collections.
+	opener := &stubOpener{streams: map[string]device.InputStream{"enc": newStubStream()}}
+	enc := encoderInfo("enc", "")
+	enc.Interface = 1
+	enum := fakeEnumerator{infos: []device.Info{enc}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var got []Interface
+	s := newSource(enum, opener, WithOnStreamOpen(func(ifaces []Interface) {
+		got = ifaces
+		cancel()
+	}))
+
+	err := s.Stream(ctx, func(protocol.InputEvent) error { return nil })
+
+	require.NoError(t, err)
+	assert.Equal(t, []Interface{{Path: "enc", UsagePage: 0x000c, Usage: 0x0001, InterfaceNumber: 1}}, got)
+}
+
+func TestStream_WhenInterfaceAccessDenied_ShouldNotCallOnStreamOpen(t *testing.T) {
+	t.Parallel()
+	denied := fmt.Errorf("device.Open %q: %w: %w", "enc", device.ErrOpen, device.ErrAccessDenied)
+	opener := &stubOpener{errs: map[string]error{"enc": denied}}
+	enum := fakeEnumerator{infos: []device.Info{encoderInfo("enc", "")}}
+	s := newSource(enum, opener, WithOnStreamOpen(func([]Interface) {
+		t.Error("OnStreamOpen must not be called when an open fails")
+	}))
+
+	err := s.Stream(context.Background(), func(protocol.InputEvent) error { return nil })
+
+	assert.ErrorIs(t, err, ErrAccessDenied)
+}
+
 func TestSeizeSupport_ShouldMirrorPlatformSeizeSupport(t *testing.T) {
 	t.Parallel()
 	want := device.PlatformSeizeSupport()

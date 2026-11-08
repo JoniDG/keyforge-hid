@@ -2,6 +2,7 @@ package device
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sstallion/go-hid"
 )
@@ -96,7 +97,23 @@ func (o *hidOpener) Open(info Info) (InputStream, error) {
 		return err
 	})
 	if err != nil {
-		return nil, fmt.Errorf("device.Open %q: %w", path, err)
+		return nil, fmt.Errorf("device.Open %q: %w", path, markNotPermitted(err))
 	}
 	return newStream(dev), nil
+}
+
+// ioKitNotPermitted is kIOReturnNotPermitted as hidapi prints it on
+// macOS. go-hid only hands back hidapi's message, so it is matched as
+// text.
+const ioKitNotPermitted = "0xe00002e2"
+
+// markNotPermitted tags the error macOS returns when the process lacks
+// Input Monitoring with ErrAccessDenied: reopening fails the same way
+// until the user grants the permission, so callers must not treat it
+// like an unplug.
+func markNotPermitted(err error) error {
+	if strings.Contains(strings.ToLower(err.Error()), ioKitNotPermitted) {
+		return fmt.Errorf("%w: %w", ErrAccessDenied, err)
+	}
+	return err
 }

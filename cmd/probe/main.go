@@ -272,7 +272,7 @@ func streamAllInputs(target device.IdentifiedDevice, seize seizeStatus) error {
 
 	deviceID := events.DeviceIDFor(target.VendorID, target.ProductID, inputs[0].Info.Serial)
 	encoder := json.NewEncoder(os.Stdout)
-	err := events.StreamAll(ctx, device.NewOpener(), deviceID, target.Known.Codes, inputs, func(e protocol.InputEvent) error {
+	err := events.StreamAll(ctx, device.NewOpener(), deviceID, target.Known.Codes, inputs, nil, func(e protocol.InputEvent) error {
 		return encoder.Encode(e)
 	})
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

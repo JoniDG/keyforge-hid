@@ -100,7 +100,7 @@ func TestStreamAll_WhenInputsEmpty_ShouldReturnNilImmediately(t *testing.T) {
 	t.Parallel()
 	opener := &stubOpener{}
 
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, nil, func(_ protocol.InputEvent) error {
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, nil, nil, func(_ protocol.InputEvent) error {
 		t.Fatal("sink must not be called")
 		return nil
 	})
@@ -117,7 +117,7 @@ func TestStreamAll_WhenAllRolesUnknown_ShouldReturnNilWithoutOpening(t *testing.
 		Role: device.InputRole("unrecognized"),
 	}}
 
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error {
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error {
 		t.Fatal("sink must not be called")
 		return nil
 	})
@@ -135,7 +135,7 @@ func TestStreamAll_WhenOpenFails_ShouldReturnErrorAndNotInvokeSink(t *testing.T)
 		Role: device.RoleKeyboard,
 	}}
 
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error {
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error {
 		t.Fatal("sink must not be called")
 		return nil
 	})
@@ -157,7 +157,7 @@ func TestStreamAll_WhenSecondOpenFails_ShouldCloseFirstStreamBeforeReturning(t *
 		{Info: device.Info{Path: "p2"}, Role: device.RoleConsumer},
 	}
 
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error { return nil })
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error { return nil })
 
 	require.ErrorIs(t, err, boom)
 	select {
@@ -184,7 +184,7 @@ func TestStreamAll_WhenKeyboardReportArrives_ShouldDeliverDecodedEventToSink(t *
 
 	var mu sync.Mutex
 	var got []protocol.InputEvent
-	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(e protocol.InputEvent) error {
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, func(e protocol.InputEvent) error {
 		mu.Lock()
 		got = append(got, e)
 		done := len(got) == 2
@@ -221,7 +221,7 @@ func TestStreamAll_WhenEncoderReportArrives_ShouldDeliverDecodedEventToSink(t *t
 
 	var mu sync.Mutex
 	var got []protocol.InputEvent
-	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(e protocol.InputEvent) error {
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, func(e protocol.InputEvent) error {
 		mu.Lock()
 		got = append(got, e)
 		mu.Unlock()
@@ -267,7 +267,7 @@ func TestStreamAll_WithKeyboardAndEncoder_ShouldDeliverEventsFromBoth(t *testing
 		return nil
 	}
 
-	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, sink)
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, sink)
 
 	require.True(t, errors.Is(err, context.Canceled))
 	mu.Lock()
@@ -286,7 +286,7 @@ func TestStreamAll_WhenSinkReturnsError_ShouldCancelAndPropagate(t *testing.T) {
 	inputs := []device.MatchedInput{{Info: device.Info{Path: "p1"}, Role: device.RoleKeyboard}}
 	boom := errors.New("sink rejected")
 
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error {
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error {
 		return boom
 	})
 
@@ -304,7 +304,7 @@ func TestStreamAll_WhenContextCancelledExternally_ShouldReturnContextCanceled(t 
 
 	done := make(chan error, 1)
 	go func() {
-		done <- StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error { return nil })
+		done <- StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error { return nil })
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -326,7 +326,7 @@ func TestStreamAll_WhenReaderReturnsFatalError_ShouldPropagate(t *testing.T) {
 	}
 	inputs := []device.MatchedInput{{Info: device.Info{Path: "p1"}, Role: device.RoleKeyboard}}
 
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error { return nil })
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error { return nil })
 
 	assert.ErrorIs(t, err, boom)
 }
@@ -352,7 +352,7 @@ func TestStreamAll_WhenOneOfMultipleReadersFails_ShouldCancelOthersAndPropagate(
 
 	done := make(chan error, 1)
 	go func() {
-		done <- StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error { return nil })
+		done <- StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error { return nil })
 	}()
 
 	select {
@@ -379,7 +379,7 @@ func TestStreamAll_WhenKeyboardEmitsShortReport_ShouldSkipSilentlyAndContinue(t 
 	defer cancel()
 
 	var got []protocol.InputEvent
-	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(e protocol.InputEvent) error {
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, func(e protocol.InputEvent) error {
 		got = append(got, e)
 		cancel()
 		return nil
@@ -411,7 +411,7 @@ func TestStreamAll_WhenCodesGiven_ShouldNameInputsAfterThem(t *testing.T) {
 	defer cancel()
 
 	var ids []string
-	err := StreamAll(ctx, opener, testDeviceID, codes, inputs, func(e protocol.InputEvent) error {
+	err := StreamAll(ctx, opener, testDeviceID, codes, inputs, nil, func(e protocol.InputEvent) error {
 		ids = append(ids, e.InputId)
 		if len(ids) == 2 {
 			cancel()
@@ -493,7 +493,7 @@ func TestStreamAll_WhenTwoInputsShareSamePath_ShouldOpenOnceAndApplyBothMappers(
 	defer cancel()
 
 	var got []protocol.InputEvent
-	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(e protocol.InputEvent) error {
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, func(e protocol.InputEvent) error {
 		got = append(got, e)
 		cancel()
 		return nil
@@ -529,7 +529,7 @@ func TestStreamAll_WhenSharedPathDeliversReportsForBothMappers_ShouldEmitFromBot
 
 	var mu sync.Mutex
 	byKind := map[protocol.InputKind]int{}
-	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(e protocol.InputEvent) error {
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, nil, func(e protocol.InputEvent) error {
 		mu.Lock()
 		byKind[e.Kind]++
 		done := byKind[protocol.InputKindKey] >= 1 && byKind[protocol.InputKindEncoder] >= 1
@@ -565,11 +565,81 @@ func TestStreamAll_WhenSinkErrorsMidStream_ShouldStopCallingSinkButKeepDrainingE
 	boom := errors.New("sink rejected")
 
 	var callCount atomic.Int32
-	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func(_ protocol.InputEvent) error {
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, nil, func(_ protocol.InputEvent) error {
 		callCount.Add(1)
 		return boom
 	})
 
 	require.ErrorIs(t, err, boom)
 	assert.Equal(t, int32(1), callCount.Load(), "sink must be invoked only once before subsequent events are skipped")
+}
+
+func TestStreamAll_WhenAllInputsOpen_ShouldReportEachPathOnceBeforeAnyEvent(t *testing.T) {
+	t.Parallel()
+	opener := &stubOpener{streams: map[string]device.InputStream{
+		"p1": newStubStream([]byte{0, 0, 0x04, 0, 0, 0, 0, 0}),
+		"p2": newStubStream(),
+	}}
+	p1 := device.Info{Path: "p1", UsagePage: 0x0001, Usage: 0x0006}
+	p2 := device.Info{Path: "p2", UsagePage: 0x000c, Usage: 0x0001}
+	inputs := []device.MatchedInput{
+		{Info: p1, Role: device.RoleKeyboard},
+		{Info: p1, Role: device.RoleConsumer},
+		{Info: p2, Role: device.RoleConsumer},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var seq []string
+	var opened []device.Info
+	err := StreamAll(ctx, opener, testDeviceID, testCodes, inputs, func(infos []device.Info) {
+		mu.Lock()
+		defer mu.Unlock()
+		seq = append(seq, "open")
+		opened = infos
+	}, func(protocol.InputEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		seq = append(seq, "event")
+		cancel()
+		return nil
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"open", "event"}, seq)
+	assert.Equal(t, []device.Info{p1, p2}, opened)
+}
+
+func TestStreamAll_WhenAnOpenFails_ShouldNotReportOpened(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("open p2 failed")
+	opener := &stubOpener{
+		streams: map[string]device.InputStream{"p1": newStubStream()},
+		errs:    map[string]error{"p2": boom},
+	}
+	inputs := []device.MatchedInput{
+		{Info: device.Info{Path: "p1"}, Role: device.RoleKeyboard},
+		{Info: device.Info{Path: "p2"}, Role: device.RoleConsumer},
+	}
+
+	err := StreamAll(context.Background(), opener, testDeviceID, testCodes, inputs, func([]device.Info) {
+		t.Error("onOpen must not be called when an open fails")
+	}, func(protocol.InputEvent) error { return nil })
+
+	require.ErrorIs(t, err, boom)
+}
+
+func TestStreamAll_WhenNothingDecodable_ShouldNotReportOpened(t *testing.T) {
+	t.Parallel()
+	inputs := []device.MatchedInput{{Info: device.Info{Path: "p1"}, Role: device.InputRole("unrecognized")}}
+
+	err := StreamAll(context.Background(), &stubOpener{}, testDeviceID, testCodes, inputs, func([]device.Info) {
+		t.Error("onOpen must not be called when nothing is opened")
+	}, func(protocol.InputEvent) error { return nil })
+
+	require.NoError(t, err)
 }
