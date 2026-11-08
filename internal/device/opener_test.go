@@ -150,6 +150,24 @@ func TestOpener_Open_WhenPathFails_ShouldWrapErrOpen(t *testing.T) {
 	assert.Nil(t, stream)
 	assert.ErrorIs(t, err, ErrOpen)
 	assert.ErrorIs(t, err, cause)
+	assert.NotErrorIs(t, err, ErrAccessDenied)
+}
+
+func TestOpener_Open_WhenIOKitNotPermitted_ShouldWrapErrOpenAndErrAccessDenied(t *testing.T) {
+	t.Parallel()
+	// Verbatim from macOS without Input Monitoring.
+	cause := errors.New("hid_open_path: failed to open IOHIDDevice from mach entry: (0xE00002E2) (iokit/common) not permitted")
+	o := &hidOpener{
+		mode:     sharedNoopMode(),
+		openPath: func(_ string) (hidDevice, error) { return nil, cause },
+	}
+
+	stream, err := o.Open(Info{Path: "DevSrvsID:4295002293"})
+
+	assert.Nil(t, stream)
+	assert.ErrorIs(t, err, ErrOpen)
+	assert.ErrorIs(t, err, ErrAccessDenied)
+	assert.ErrorIs(t, err, cause)
 }
 
 func TestOpener_Open_WhenInitFails_ShouldWrapErrInitWithoutOpening(t *testing.T) {

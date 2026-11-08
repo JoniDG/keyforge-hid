@@ -33,12 +33,12 @@ type readerSpec struct {
 	mappers []reportMapper
 }
 
-// StreamAll opens every input in parallel via opener, decodes each
-// stream's reports through the role-appropriate mapper(s), naming the
-// inputs after codes, and delivers the resulting InputEvents to sink in
-// arrival order. It
-// blocks until the parent context is cancelled, sink returns an error,
-// or any reader fails with a non-cancellation error.
+// StreamAll opens every input via opener, reads them in parallel,
+// decodes each stream's reports through the role-appropriate mapper(s),
+// naming the inputs after codes, and delivers the resulting InputEvents
+// to sink in arrival order. It blocks until the parent context is
+// cancelled, sink returns an error, or any reader fails with a
+// non-cancellation error.
 //
 // Inputs whose platform Path coincides (multi-TLC interfaces) are
 // opened once and every report is offered to each mapper for that
@@ -49,7 +49,12 @@ type readerSpec struct {
 // no inputs are decodable, StreamAll returns nil immediately without
 // opening anything. All opened streams are closed before StreamAll
 // returns, even on the error path.
-func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protocol.DeviceID, codes device.Codes, inputs []device.MatchedInput, sink EventSink) error {
+//
+// onOpen, when non-nil, is called once with the interfaces opened (one
+// per distinct path, in input order) after all of them opened and
+// before any report is read. It is not called when an open fails or
+// nothing is decodable.
+func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protocol.DeviceID, codes device.Codes, inputs []device.MatchedInput, onOpen func([]device.Info), sink EventSink) error {
 	specs, err := openAll(opener, deviceID, codes, inputs)
 	if err != nil {
 		return err
@@ -58,6 +63,13 @@ func StreamAll(parentCtx context.Context, opener device.Opener, deviceID protoco
 
 	if len(specs) == 0 {
 		return nil
+	}
+	if onOpen != nil {
+		opened := make([]device.Info, len(specs))
+		for i, spec := range specs {
+			opened[i] = spec.info
+		}
+		onOpen(opened)
 	}
 
 	ctx, cancel := context.WithCancel(parentCtx)
